@@ -54,7 +54,7 @@ def run_backtest(
     starting_balance: float = 10_000.0,
     warmup_bars: int = 210,
 ) -> BacktestReport:
-    broker = SimulatedBroker(starting_balance)
+    broker = SimulatedBroker(starting_balance, spread_cost_per_unit=risk_config.spread_cost_per_unit)
     risk_mgr = RiskManager(risk_config)
     risk_mgr.start_of_day(starting_balance)
     risk_mgr.update_equity(starting_balance)
@@ -72,9 +72,7 @@ def run_backtest(
             risk_mgr.start_of_day(broker.get_account_balance())
             last_day = bar_day
 
-        closed = broker.check_stops(row["low"])
-        if closed is None:
-            closed = broker.check_stops(row["high"])
+        broker.check_stops_bar(row["high"], row["low"])
 
         equity = broker.get_account_balance()
         risk_mgr.update_equity(equity)
@@ -92,6 +90,7 @@ def run_backtest(
         plan = risk_mgr.size_trade(signal, broker.get_account_balance())
         if plan:
             broker.open_position(plan)
+            risk_mgr.record_trade_opened()
 
     # Close any position still open at the end of the test on the last close price.
     if broker.get_open_position() is not None:

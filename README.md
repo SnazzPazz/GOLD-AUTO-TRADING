@@ -24,6 +24,19 @@ loop that trades a simulated or real OANDA **practice** account.
   realistic risk constraints. Markets change. Use the backtester and the
   demo loop together, for a meaningful stretch of time, before trusting
   this with real capital.
+- **Same-bar stop/target ambiguity always resolves to the worst case.**
+  Candle data doesn't tell you whether price touched the stop or the
+  target *first* within a bar. `SimulatedBroker.check_stops_bar` always
+  resolves the stop-loss side first when both are inside the same bar's
+  range, for both longs and shorts — it never assumes the best case
+  happened. Earlier versions of this got that wrong specifically for
+  shorts (checked low before high regardless of position direction),
+  which silently inflated short-trade win rate in backtests; that's fixed.
+- **Backtests now charge a spread cost** (`SPREAD_COST_PER_UNIT`) on every
+  simulated close, since a strategy that trades often can see its edge
+  erased by real bid/ask spread alone. Treat the backtest number as the
+  honest floor, not the live result — real spreads vary and widen around
+  news.
 
 ## Why gold, why OANDA
 
@@ -130,6 +143,9 @@ was made.
 | `MAX_DRAWDOWN_PCT` | 10% | Halts trading entirely (manual restart) past this drawdown from peak equity |
 | `MAX_CONCURRENT_POSITIONS` | 1 | Gold-only, so no pyramiding by default |
 | `MAX_LEVERAGE` | 10x | Hard cap on notional exposure vs. account balance |
+| `MAX_TRADES_PER_DAY` | 5 | Caps new positions per day to limit whipsaw in choppy conditions |
+| `SPREAD_COST_PER_UNIT` | 0.30 | Approximate round-trip bid/ask cost charged on every simulated close, so results aren't flattered by frictionless fills |
+| `MIN_CONFIRMATIONS` | 2 | Independent signals (trend/momentum/pattern/Bollinger) required to agree before a trade fires |
 
 These are conservative starting points, not tuned recommendations — adjust
 them deliberately, and re-run the backtester after any change.

@@ -51,6 +51,13 @@ class RiskConfig:
     max_concurrent_positions: int = field(default_factory=lambda: _get_int("MAX_CONCURRENT_POSITIONS", 1))
     # Refuse to size a trade beyond this leverage against account balance.
     max_leverage: float = field(default_factory=lambda: _get_float("MAX_LEVERAGE", 10.0))
+    # Cap on new positions opened per calendar day, to stop whipsaw/overtrading in choppy conditions.
+    max_trades_per_day: int = field(default_factory=lambda: _get_int("MAX_TRADES_PER_DAY", 5))
+    # Approximate round-trip bid/ask spread cost per unit (price terms), applied in the
+    # simulated broker so backtest/demo results aren't flattered by frictionless fills.
+    # OANDA's typical XAU_USD spread is roughly $0.20-$0.40 under normal conditions and
+    # widens around news/thin liquidity; this is a conservative flat approximation, not a feed.
+    spread_cost_per_unit: float = field(default_factory=lambda: _get_float("SPREAD_COST_PER_UNIT", 0.30))
 
 
 @dataclass
@@ -67,6 +74,9 @@ class Settings:
     candle_granularity: str = field(default_factory=lambda: os.getenv("CANDLE_GRANULARITY", "M15"))
 
     enable_sentiment: bool = field(default_factory=lambda: _get_bool("ENABLE_SENTIMENT", True))
+    # How many independent confirmations (trend/momentum/pattern/Bollinger) must agree before a
+    # signal fires. Higher = fewer, more selective trades; lower = more trades, more false positives.
+    min_confirmations: int = field(default_factory=lambda: _get_int("MIN_CONFIRMATIONS", 2))
 
     risk: RiskConfig = field(default_factory=RiskConfig)
 

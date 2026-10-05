@@ -17,7 +17,10 @@ import time
 from dataclasses import dataclass
 
 import feedparser
+import requests
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+FEED_FETCH_TIMEOUT_SECONDS = 10
 
 GOLD_RSS_FEEDS = [
     "https://www.kitco.com/rss/KitcoNews.xml",
@@ -53,7 +56,12 @@ class NewsSentimentProvider:
         headlines: list[str] = []
         for url in self._feeds:
             try:
-                parsed = feedparser.parse(url)
+                # feedparser.parse(url) hands the fetch to urllib, which has no
+                # timeout and could hang the whole polling loop on a slow/dead
+                # feed; fetch with requests (bounded) and hand it the bytes instead.
+                resp = requests.get(url, timeout=FEED_FETCH_TIMEOUT_SECONDS)
+                resp.raise_for_status()
+                parsed = feedparser.parse(resp.content)
             except Exception:
                 continue
             for entry in parsed.entries[:30]:

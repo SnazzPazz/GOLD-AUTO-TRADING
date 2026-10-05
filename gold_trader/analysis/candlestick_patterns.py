@@ -39,8 +39,16 @@ def _bearish(df: pd.DataFrame) -> pd.Series:
     return df["close"] < df["open"]
 
 
+def _clean(series: pd.Series) -> pd.Series:
+    """Every public pattern function returns through here so it's safe to call
+    standalone (not just via detect_all): NaN from shift()-based lookbacks on
+    the first few rows becomes False rather than propagating as NaN, which
+    would otherwise make the Series untrustworthy to index with `if`."""
+    return series.fillna(False).astype(bool)
+
+
 def doji(df: pd.DataFrame, body_ratio: float = 0.1) -> pd.Series:
-    return (_body(df) / _range(df)) <= body_ratio
+    return _clean((_body(df) / _range(df)) <= body_ratio)
 
 
 def hammer(df: pd.DataFrame) -> pd.Series:
@@ -49,7 +57,7 @@ def hammer(df: pd.DataFrame) -> pd.Series:
     rng = _range(df)
     lower = _lower_wick(df)
     upper = _upper_wick(df)
-    return (lower >= 2 * body) & (upper <= body) & ((body / rng) <= 0.35)
+    return _clean((lower >= 2 * body) & (upper <= body) & ((body / rng) <= 0.35))
 
 
 def shooting_star(df: pd.DataFrame) -> pd.Series:
@@ -58,13 +66,13 @@ def shooting_star(df: pd.DataFrame) -> pd.Series:
     rng = _range(df)
     lower = _lower_wick(df)
     upper = _upper_wick(df)
-    return (upper >= 2 * body) & (lower <= body) & ((body / rng) <= 0.35)
+    return _clean((upper >= 2 * body) & (lower <= body) & ((body / rng) <= 0.35))
 
 
 def bullish_engulfing(df: pd.DataFrame) -> pd.Series:
     prev_open, prev_close = df["open"].shift(1), df["close"].shift(1)
     prev_bearish = prev_close < prev_open
-    return (
+    return _clean(
         prev_bearish
         & _bullish(df)
         & (df["close"] >= prev_open)
@@ -76,7 +84,7 @@ def bullish_engulfing(df: pd.DataFrame) -> pd.Series:
 def bearish_engulfing(df: pd.DataFrame) -> pd.Series:
     prev_open, prev_close = df["open"].shift(1), df["close"].shift(1)
     prev_bullish = prev_close > prev_open
-    return (
+    return _clean(
         prev_bullish
         & _bearish(df)
         & (df["open"] >= prev_close)
@@ -92,7 +100,7 @@ def morning_star(df: pd.DataFrame) -> pd.Series:
     c2_small = _body(df.shift(1)) <= 0.4 * c1_body
     c3_bull = _bullish(df)
     c3_closes_into_c1 = df["close"] >= (df["open"].shift(2) + df["close"].shift(2)) / 2
-    return c1_bear & c2_small & c3_bull & c3_closes_into_c1
+    return _clean(c1_bear & c2_small & c3_bull & c3_closes_into_c1)
 
 
 def evening_star(df: pd.DataFrame) -> pd.Series:
@@ -102,13 +110,13 @@ def evening_star(df: pd.DataFrame) -> pd.Series:
     c2_small = _body(df.shift(1)) <= 0.4 * c1_body
     c3_bear = _bearish(df)
     c3_closes_into_c1 = df["close"] <= (df["open"].shift(2) + df["close"].shift(2)) / 2
-    return c1_bull & c2_small & c3_bear & c3_closes_into_c1
+    return _clean(c1_bull & c2_small & c3_bear & c3_closes_into_c1)
 
 
 def piercing_line(df: pd.DataFrame) -> pd.Series:
     prev_open, prev_close = df["open"].shift(1), df["close"].shift(1)
     midpoint = (prev_open + prev_close) / 2
-    return (
+    return _clean(
         (prev_close < prev_open)
         & _bullish(df)
         & (df["open"] < prev_close)
@@ -120,7 +128,7 @@ def piercing_line(df: pd.DataFrame) -> pd.Series:
 def dark_cloud_cover(df: pd.DataFrame) -> pd.Series:
     prev_open, prev_close = df["open"].shift(1), df["close"].shift(1)
     midpoint = (prev_open + prev_close) / 2
-    return (
+    return _clean(
         (prev_close > prev_open)
         & _bearish(df)
         & (df["open"] > prev_close)
@@ -141,7 +149,7 @@ def detect_all(df: pd.DataFrame) -> pd.DataFrame:
         "evening_star": evening_star(df),
         "piercing_line": piercing_line(df),
         "dark_cloud_cover": dark_cloud_cover(df),
-    }, index=df.index).fillna(False)
+    }, index=df.index)
 
 
 BULLISH_PATTERNS = ["hammer", "bullish_engulfing", "morning_star", "piercing_line"]

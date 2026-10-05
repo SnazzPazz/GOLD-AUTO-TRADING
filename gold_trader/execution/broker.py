@@ -59,13 +59,27 @@ class BrokerExecution(ABC):
     def close_position(self, exit_price: float, reason: str) -> ClosedTrade | None: ...
 
     @abstractmethod
-    def check_stops(self, current_price: float) -> ClosedTrade | None:
-        """Close the open position if price has crossed its stop/take-profit. Returns the closed trade, if any."""
+    def check_stops_bar(self, high: float, low: float) -> ClosedTrade | None:
+        """Close the open position if its stop-loss or take-profit was crossed
+        within [low, high]. For a single live tick, pass the same price as
+        both `high` and `low`. When both levels fall inside the same bar
+        (ambiguous without tick data), the stop-loss side always wins — the
+        conservative assumption — rather than whichever of high/low happens
+        to be checked first."""
 
 
 class SimulatedBroker(BrokerExecution):
-    def __init__(self, starting_balance: float):
+    """`spread_cost_per_unit` models the round-trip bid/ask spread cost
+    (entry + exit) that a real broker fill would pay, so backtest/demo
+    results aren't flattered by pretending trading is frictionless. It's a
+    simplification — real spreads widen around news and thin liquidity —
+    but a flat, realistic-order-of-magnitude cost is far more honest than
+    zero.
+    """
+
+    def __init__(self, starting_balance: float, spread_cost_per_unit: float = 0.0):
         self.balance = starting_balance
+        self.spread_cost_per_unit = spread_cost_per_unit
         self._position: Position | None = None
         self.closed_trades: list[ClosedTrade] = []
 
@@ -83,7 +97,9 @@ class SimulatedBroker(BrokerExecution):
     def _close(self, exit_price: float, reason: str) -> ClosedTrade:
         pos = self._position
         assert pos is not None
-        pnl = (exit_price - pos.entry_price) * pos.units
+        gross_pnl = (exit_price - pos.entry_price) * pos.units
+        spread_cost = abs(pos.units) * self.spread_cost_per_unit
+        pnl = gross_pnl - spread_cost
         self.balance += pnl
         direction = Direction.LONG if pos.units > 0 else Direction.SHORT
         trade = ClosedTrade(direction, pos.units, pos.entry_price, exit_price, pnl, reason)
@@ -96,19 +112,19 @@ class SimulatedBroker(BrokerExecution):
             return None
         return self._close(exit_price, reason)
 
-    def check_stops(self, current_price: float) -> ClosedTrade | None:
+    def check_stops_bar(self, high: float, low: float) -> ClosedTrade | None:
         pos = self._position
         if pos is None:
             return None
-        if pos.units > 0:  # long
-            if current_price <= pos.stop_loss:
+        if pos.units > 0:  # long: stop sits below entry, target above
+            if low <= pos.stop_loss:
                 return self._close(pos.stop_loss, "stop_loss")
-            if current_price >= pos.take_profit:
+            if high >= pos.take_profit:
                 return self._close(pos.take_profit, "take_profit")
-        else:  # short
-            if current_price >= pos.stop_loss:
+        else:  # short: stop sits above entry, target below
+            if high >= pos.stop_loss:
                 return self._close(pos.stop_loss, "stop_loss")
-            if current_price <= pos.take_profit:
+            if low <= pos.take_profit:
                 return self._close(pos.take_profit, "take_profit")
         return None
 
@@ -188,7 +204,7 @@ class OandaPracticeBroker(BrokerExecution):
         pnl = (exit_price - pos.entry_price) * pos.units
         return ClosedTrade(direction, pos.units, pos.entry_price, exit_price, pnl, reason)
 
-    def check_stops(self, current_price: float) -> ClosedTrade | None:
+    def check_stops_bar(self, high: float, low: float) -> ClosedTrade | None:
         # OANDA enforces stop-loss/take-profit server-side (attached on fill above),
         # so there is nothing to poll for client-side here.
         return None

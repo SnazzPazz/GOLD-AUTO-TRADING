@@ -74,7 +74,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
     broker = (
         OandaPracticeBroker(settings)
         if args.broker == "oanda"
-        else SimulatedBroker(settings.starting_demo_balance)
+        else SimulatedBroker(settings.starting_demo_balance, spread_cost_per_unit=settings.risk.spread_cost_per_unit)
     )
     sentiment_provider = NewsSentimentProvider() if settings.enable_sentiment else None
 
@@ -100,7 +100,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
                 risk_mgr.start_of_day(broker.get_account_balance())
                 last_day = bar_day
 
-            closed = broker.check_stops(latest_price)
+            closed = broker.check_stops_bar(latest_price, latest_price)
             if closed:
                 logger.info(
                     "Position closed [%s]: %s %d units, entry=%.2f exit=%.2f pnl=%+.2f",
@@ -129,6 +129,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
                     plan = risk_mgr.size_trade(signal, equity)
                     if plan:
                         broker.open_position(plan)
+                        risk_mgr.record_trade_opened()
                         logger.info(
                             "Opened %s %d units @ %.2f | stop=%.2f target=%.2f | risking $%.2f",
                             plan.direction.value, abs(plan.units), plan.entry_price,

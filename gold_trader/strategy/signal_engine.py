@@ -22,6 +22,7 @@ import pandas as pd
 
 from gold_trader.analysis import candlestick_patterns as patterns
 from gold_trader.analysis import indicators as ind
+from gold_trader.config import settings
 
 
 class Direction(Enum):
@@ -39,9 +40,6 @@ class Signal:
     atr: float = 0.0
 
 
-MIN_CONFIRMATIONS = 2  # of the independent checks below, excluding sentiment
-
-
 def prepare(df: pd.DataFrame) -> pd.DataFrame:
     """Attach indicators and pattern columns. Call once per fresh candle batch."""
     enriched = ind.compute_all(df)
@@ -49,8 +47,14 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     return enriched.join(pattern_df)
 
 
-def generate_signal(enriched_df: pd.DataFrame, sentiment_score: float | None = None) -> Signal:
+def generate_signal(
+    enriched_df: pd.DataFrame,
+    sentiment_score: float | None = None,
+    min_confirmations: int | None = None,
+) -> Signal:
     """Evaluate the *last completed* row of an already-`prepare()`d frame."""
+    min_confirmations = min_confirmations if min_confirmations is not None else settings.min_confirmations
+
     if len(enriched_df) < 210:  # need enough bars for EMA-200 etc. to be meaningful
         return Signal(Direction.FLAT, 0.0, ["insufficient history for reliable indicators"])
 
@@ -86,14 +90,14 @@ def generate_signal(enriched_df: pd.DataFrame, sentiment_score: float | None = N
 
     long_count, short_count = len(long_votes), len(short_votes)
 
-    if long_count >= MIN_CONFIRMATIONS and long_count > short_count:
+    if long_count >= min_confirmations and long_count > short_count:
         direction, votes, confirmations = Direction.LONG, long_votes, long_count
-    elif short_count >= MIN_CONFIRMATIONS and short_count > long_count:
+    elif short_count >= min_confirmations and short_count > long_count:
         direction, votes, confirmations = Direction.SHORT, short_votes, short_count
     else:
         return Signal(
             Direction.FLAT, 0.0,
-            [f"not enough confirmations (long={long_count}, short={short_count}, need {MIN_CONFIRMATIONS})"],
+            [f"not enough confirmations (long={long_count}, short={short_count}, need {min_confirmations})"],
             price=row["close"], atr=row["atr_14"],
         )
 

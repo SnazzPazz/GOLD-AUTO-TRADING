@@ -80,6 +80,28 @@ def test_max_concurrent_positions_blocks_new_trade():
     assert "concurrent" in reason
 
 
+def test_max_trades_per_day_blocks_further_trades():
+    rm = make_risk_manager(max_trades_per_day=2)
+    rm.start_of_day(10_000)
+    rm.record_trade_opened()
+    rm.record_trade_opened()
+    can_trade, reason = rm.can_trade(open_position_count=0)
+    assert can_trade is False
+    assert "trades per day" in reason
+
+
+def test_max_trades_per_day_resets_on_new_day():
+    rm = make_risk_manager(max_trades_per_day=1)
+    rm.start_of_day(10_000)
+    rm.record_trade_opened()
+    can_trade, _ = rm.can_trade(open_position_count=0)
+    assert can_trade is False
+
+    rm.start_of_day(10_000)  # new day
+    can_trade_after_reset, _ = rm.can_trade(open_position_count=0)
+    assert can_trade_after_reset is True
+
+
 def test_flat_signal_sizes_to_nothing():
     rm = make_risk_manager()
     signal = Signal(Direction.FLAT, confidence=0.0, price=2000.0, atr=10.0)

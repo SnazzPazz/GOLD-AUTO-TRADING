@@ -31,10 +31,15 @@ class RiskManager:
         self.halted_for_day = False
         self.halted_permanently = False
         self.halt_reason: str | None = None
+        self.trades_today = 0
 
     def start_of_day(self, balance: float) -> None:
         self.day_start_balance = balance
         self.halted_for_day = False
+        self.trades_today = 0
+
+    def record_trade_opened(self) -> None:
+        self.trades_today += 1
 
     def update_equity(self, equity: float) -> None:
         if self.peak_equity is None or equity > self.peak_equity:
@@ -65,6 +70,8 @@ class RiskManager:
             return False, self.halt_reason
         if open_position_count >= self.cfg.max_concurrent_positions:
             return False, f"max concurrent positions ({self.cfg.max_concurrent_positions}) reached"
+        if self.trades_today >= self.cfg.max_trades_per_day:
+            return False, f"max trades per day ({self.cfg.max_trades_per_day}) reached"
         return True, None
 
     def size_trade(self, signal: Signal, account_balance: float) -> TradePlan | None:
