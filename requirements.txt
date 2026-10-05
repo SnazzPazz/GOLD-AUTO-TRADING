@@ -1,0 +1,9 @@
+pandas
+numpy
+requests
+yfinance
+vaderSentiment
+feedparser
+python-dotenv
+pydantic
+pytest
