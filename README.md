@@ -117,9 +117,12 @@ gold_trader/
   decision_log.py         Append-only JSONL record of every live-loop evaluation
   execution/broker.py    SimulatedBroker (local ledger) and
                           OandaPracticeBroker (real demo-account orders)
-  backtest/backtester.py  Bar-by-bar walk-forward replay, no lookahead
+  backtest/backtester.py  Bar-by-bar replay, no lookahead
+  research/walk_forward.py  Out-of-sample parameter research: grid search
+                              on in-sample folds, judged only on a held-out
+                              fold the search never saw
   tests/                 pytest unit tests for all of the above
-main.py                 CLI: `backtest` and `demo` subcommands
+main.py                 CLI: `backtest`, `walk-forward`, and `demo` subcommands
 ```
 
 Price action is the primary signal. Candlestick patterns, trend (EMA50 vs
@@ -164,6 +167,27 @@ Prints a report (win rate, profit factor, max drawdown, Sharpe-like
 ratio) and writes the equity curve to `reports/latest_backtest.csv`. Look
 hard at these numbers — a strategy with a poor profit factor or deep
 drawdown on history is not one to trust live, demo or otherwise.
+
+**Then walk-forward research — before trusting any single backtest number.**
+One backtest on one window tells you almost nothing: it's one sample, and
+tuning parameters against that same window to make the number look better
+is curve-fitting, not research. `walk-forward` does it the honest way: it
+splits history into folds, grid-searches a small set of config knobs using
+every fold *except the last*, then reports performance only on that final
+held-out fold — the only fold the search never touched.
+
+```bash
+python main.py walk-forward --bars 5000 --granularity H1 --folds 6
+```
+
+Three sections print: the shipped default config's performance on every
+fold (a consistency check — wildly different results fold-to-fold means
+the strategy is fragile, not just unlucky once), the in-sample leaderboard
+(for transparency — a losing search should be visible, not hidden), and
+the held-out fold result, which is the only number in the whole report
+that wasn't influenced by picking a config to look good on this data. If
+the held-out result isn't meaningfully better than the default, that's the
+honest answer — report it, don't widen the grid until something sticks.
 
 **Then the continuous demo loop**, either fully local:
 

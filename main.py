@@ -2,13 +2,20 @@
 """Gold (XAU/USD) automated trading system — demo/paper-trading only.
 
 Usage:
-    python main.py backtest [--bars N] [--granularity M15]
-    python main.py demo     [--broker simulated|oanda]
+    python main.py backtest     [--bars N] [--granularity M15]
+    python main.py walk-forward [--bars N] [--granularity M15] [--folds 6]
+    python main.py demo         [--broker simulated|oanda]
 
 `backtest` replays historical candles bar-by-bar through the exact same
 signal engine, risk manager, and sizing math the demo loop uses, and
 prints a performance report. Run this first and look hard at the numbers
 before trusting anything else here.
+
+`walk-forward` is the honest way to ask "does this strategy have real
+edge, or did one backtest just get lucky": it splits history into folds,
+grid-searches a few config knobs on all but the last fold, then reports
+performance ONLY on that final held-out fold, which the search never saw.
+See gold_trader/research/walk_forward.py for why this matters.
 
 `demo` runs continuously against either:
   - simulated: a local paper-trading ledger (no credentials needed).
@@ -32,6 +39,7 @@ from gold_trader.config import settings
 from gold_trader.data.providers import OandaDataProvider, YFinanceDataProvider
 from gold_trader.execution.broker import OandaPracticeBroker, SimulatedBroker
 from gold_trader.logging_config import setup_logging
+from gold_trader.research.walk_forward import run_walk_forward_study
 from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
 from gold_trader.sentiment.news_feed import NewsSentimentProvider
@@ -61,6 +69,66 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         "Past performance on historical data does not guarantee future\n"
         "results. Use this to sanity-check the strategy, not to predict\n"
         "live outcomes."
+    )
+
+
+# A small, fixed grid: broad enough to matter, bounded enough that searching it
+# isn't itself a curve-fitting exercise. Extending this is fine; extending it
+# until some combination "wins" on the held-out fold by chance is exactly the
+# mistake this whole module exists to prevent.
+WALK_FORWARD_PARAM_GRID = {
+    "min_confirmations": [2, 3],
+    "atr_stop_multiple": [1.0, 1.5, 2.0],
+    "reward_risk_ratio": [1.0, 1.5, 2.0],
+}
+
+
+def cmd_walk_forward(args: argparse.Namespace) -> None:
+    logger.info("Fetching historical %s candles for walk-forward study...", args.granularity)
+    provider = YFinanceDataProvider()
+    candles = provider.get_historical_candles(args.granularity, args.bars)
+    logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
+
+    result = run_walk_forward_study(
+        candles, n_folds=args.folds, base_config=settings.risk,
+        param_grid=WALK_FORWARD_PARAM_GRID, starting_balance=settings.starting_demo_balance,
+    )
+
+    print("\n" + "=" * 70)
+    print(" DEFAULT CONFIG, EVALUATED ON EVERY FOLD (consistency check)")
+    print("=" * 70)
+    for fold in result.default_config_folds:
+        r = fold.report
+        print(f"Fold {fold.fold_index} [{fold.start} -> {fold.end}]: "
+              f"return={r.total_return_pct:+.2f}% trades={r.num_trades} "
+              f"win_rate={r.win_rate:.1%} profit_factor={r.profit_factor:.2f} sharpe={r.sharpe_like:.2f}")
+
+    print("\n" + "=" * 70)
+    print(" IN-SAMPLE GRID SEARCH LEADERBOARD (selection folds only, never the held-out fold)")
+    print("=" * 70)
+    for entry in result.selected_config_in_sample_leaderboard[:10]:
+        rk = entry["rank_key"]
+        rk_str = f"sharpe={rk[0]:.2f} pf={rk[1]:.2f}" if rk else "not ranked (too few trades in some fold)"
+        print(f"{entry['params']} -> {rk_str} | mean_return={entry['mean_return_pct']:+.2f}% "
+              f"mean_trades={entry['mean_trades']:.1f}")
+
+    print("\n" + "=" * 70)
+    print(" HELD-OUT FOLD RESULT (the only honest number here)")
+    print("=" * 70)
+    changed = {
+        k: getattr(result.selected_config, k)
+        for k in WALK_FORWARD_PARAM_GRID
+        if getattr(result.selected_config, k) != getattr(settings.risk, k)
+    }
+    print(f"Selected config (chosen using in-sample folds only): {changed or 'same as default'}")
+    print(f"\nDefault config on held-out fold:\n{result.held_out_default_fold.report.summary()}")
+    print(f"Selected config on held-out fold:\n{result.held_out_fold.report.summary()}")
+    print(
+        "This held-out number is the only one of the three sections above\n"
+        "that wasn't influenced by picking a config to look good on this\n"
+        "data. If it's not meaningfully better than the default, the grid\n"
+        "search found no real edge here -- report that honestly rather than\n"
+        "widening the grid until something sticks."
     )
 
 
@@ -146,7 +214,9 @@ def cmd_demo(args: argparse.Namespace) -> None:
                 continue
 
             sentiment_score = sentiment_provider.get_sentiment().score if sentiment_provider else None
-            signal = se.generate_signal(enriched, sentiment_score=sentiment_score)
+            signal = se.generate_signal(
+                enriched, sentiment_score=sentiment_score, min_confirmations=settings.risk.min_confirmations,
+            )
 
             if signal.direction is se.Direction.FLAT:
                 decision_log.record_decision(
@@ -202,6 +272,12 @@ def main() -> None:
     bt.add_argument("--bars", type=int, default=2000)
     bt.add_argument("--granularity", default=settings.candle_granularity)
     bt.set_defaults(func=cmd_backtest)
+
+    wf = sub.add_parser("walk-forward", help="Out-of-sample walk-forward research (see module docstring).")
+    wf.add_argument("--bars", type=int, default=5000)
+    wf.add_argument("--granularity", default=settings.candle_granularity)
+    wf.add_argument("--folds", type=int, default=6)
+    wf.set_defaults(func=cmd_walk_forward)
 
     demo = sub.add_parser("demo", help="Run the continuous demo/paper-trading loop.")
     demo.add_argument("--broker", choices=["simulated", "oanda"], default="simulated")

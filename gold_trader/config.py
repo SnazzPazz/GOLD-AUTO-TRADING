@@ -71,6 +71,10 @@ class RiskConfig:
     volatility_regime_low_percentile: float = field(default_factory=lambda: _get_float("VOLATILITY_REGIME_LOW_PERCENTILE", 10.0))
     volatility_regime_high_percentile: float = field(default_factory=lambda: _get_float("VOLATILITY_REGIME_HIGH_PERCENTILE", 95.0))
 
+    # How many independent confirmations (trend/momentum/pattern/Bollinger) must agree before a
+    # signal fires. Higher = fewer, more selective trades; lower = more trades, more false positives.
+    min_confirmations: int = field(default_factory=lambda: _get_int("MIN_CONFIRMATIONS", 2))
+
 
 @dataclass
 class Settings:
@@ -86,9 +90,6 @@ class Settings:
     candle_granularity: str = field(default_factory=lambda: os.getenv("CANDLE_GRANULARITY", "M15"))
 
     enable_sentiment: bool = field(default_factory=lambda: _get_bool("ENABLE_SENTIMENT", True))
-    # How many independent confirmations (trend/momentum/pattern/Bollinger) must agree before a
-    # signal fires. Higher = fewer, more selective trades; lower = more trades, more false positives.
-    min_confirmations: int = field(default_factory=lambda: _get_int("MIN_CONFIRMATIONS", 2))
 
     risk: RiskConfig = field(default_factory=RiskConfig)
 

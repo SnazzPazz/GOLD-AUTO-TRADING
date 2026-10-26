@@ -22,7 +22,6 @@ import pandas as pd
 
 from gold_trader.analysis import candlestick_patterns as patterns
 from gold_trader.analysis import indicators as ind
-from gold_trader.config import settings
 
 
 class Direction(Enum):
@@ -50,11 +49,14 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
 def generate_signal(
     enriched_df: pd.DataFrame,
     sentiment_score: float | None = None,
-    min_confirmations: int | None = None,
+    min_confirmations: int = 2,
 ) -> Signal:
-    """Evaluate the *last completed* row of an already-`prepare()`d frame."""
-    min_confirmations = min_confirmations if min_confirmations is not None else settings.min_confirmations
-
+    """Evaluate the *last completed* row of an already-`prepare()`d frame.
+    `min_confirmations` has no implicit global default on purpose -- callers
+    (the live loop, the backtester, research code) pass it explicitly from
+    whichever RiskConfig they're using, so a research script sweeping this
+    value can never accidentally fall back to a value it didn't ask for.
+    """
     if len(enriched_df) < 210:  # need enough bars for EMA-200 etc. to be meaningful
         return Signal(Direction.FLAT, 0.0, ["insufficient history for reliable indicators"])
 

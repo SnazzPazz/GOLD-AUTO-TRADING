@@ -107,7 +107,7 @@ def run_backtest(
             continue
 
         sentiment_score = sentiment_lookup.score_at(window.index[-1].timestamp()) if sentiment_lookup else None
-        signal = se.generate_signal(window, sentiment_score=sentiment_score)
+        signal = se.generate_signal(window, sentiment_score=sentiment_score, min_confirmations=risk_config.min_confirmations)
         if signal.direction is se.Direction.FLAT:
             continue
 
