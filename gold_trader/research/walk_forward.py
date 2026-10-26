@@ -174,3 +174,56 @@ def run_walk_forward_study(
         held_out_fold=held_out_selected,
         held_out_default_fold=held_out_default,
     )
+
+
+@dataclass
+class RollingFoldOutcome:
+    fold_index: int
+    start: str
+    end: str
+    selected_params: dict            # only the params that differ from base_config, for readability
+    default_report: BacktestReport
+    selected_report: BacktestReport
+
+
+def run_rolling_walk_forward(
+    df: pd.DataFrame,
+    n_folds: int,
+    base_config: RiskConfig,
+    param_grid: dict[str, list],
+    starting_balance: float = 10_000.0,
+    min_in_sample_folds: int = 3,
+    cot_lookup: PointInTimeCotLookup | None = None,
+) -> list[RollingFoldOutcome]:
+    """A single in-sample/held-out split is one data point -- encouraging or
+    not, it's still a sample size of one, and trusting it is the same
+    mistake as trusting one ordinary backtest. This is the fuller version:
+    for each fold from `min_in_sample_folds` onward, select a config using
+    ONLY the folds strictly before it (never this fold, never anything
+    after it), then evaluate that selection ONLY on this fold. Repeated
+    across the whole series, so the result is many independent
+    out-of-sample tries instead of one split -- if a finding from the
+    single-split version is real, it should show up here as a repeated
+    pattern, not just once.
+    """
+    if n_folds <= min_in_sample_folds:
+        raise ValueError(f"n_folds ({n_folds}) must exceed min_in_sample_folds ({min_in_sample_folds})")
+
+    folds = split_folds(df, n_folds)
+    outcomes = []
+
+    for i in range(min_in_sample_folds, n_folds):
+        in_sample = folds[:i]
+        test_fold = folds[i]
+
+        selected_config, _ = grid_search_in_sample(in_sample, base_config, param_grid, starting_balance, cot_lookup=cot_lookup)
+        default_result = evaluate_fold(test_fold, base_config, starting_balance, i, cot_lookup=cot_lookup)
+        selected_result = evaluate_fold(test_fold, selected_config, starting_balance, i, cot_lookup=cot_lookup)
+
+        changed = {k: getattr(selected_config, k) for k in param_grid if getattr(selected_config, k) != getattr(base_config, k)}
+        outcomes.append(RollingFoldOutcome(
+            fold_index=i, start=str(test_fold.index[0]), end=str(test_fold.index[-1]),
+            selected_params=changed, default_report=default_result.report, selected_report=selected_result.report,
+        ))
+
+    return outcomes

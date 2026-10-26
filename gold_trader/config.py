@@ -40,7 +40,11 @@ class RiskConfig:
     # Fraction of account balance risked on a single trade's stop-loss distance.
     risk_per_trade_pct: float = field(default_factory=lambda: _get_float("RISK_PER_TRADE_PCT", 0.01))
     # ATR multiple used to place the stop-loss away from entry.
-    atr_stop_multiple: float = field(default_factory=lambda: _get_float("ATR_STOP_MULTIPLE", 1.5))
+    # 2.0, not the more conventional 1.5, per a rolling walk-forward study on real H1 gold
+    # data (see README "What's been tested and found to help"): the wider stop improved
+    # risk-adjusted performance on 5 of 7 independent out-of-sample folds, mainly by cutting
+    # whipsaw-driven repeat stop-outs, at the cost of underperforming in the cleanest trends.
+    atr_stop_multiple: float = field(default_factory=lambda: _get_float("ATR_STOP_MULTIPLE", 2.0))
     # Reward:risk ratio used to place the take-profit.
     reward_risk_ratio: float = field(default_factory=lambda: _get_float("REWARD_RISK_RATIO", 1.5))
     # Trading halts for the rest of the day once this fraction of starting-day balance is lost.

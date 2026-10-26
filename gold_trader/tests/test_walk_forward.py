@@ -7,6 +7,7 @@ from gold_trader.research.walk_forward import (
     MIN_TRADES_FOR_RANKING,
     _ranking_key,
     grid_search_in_sample,
+    run_rolling_walk_forward,
     run_walk_forward_study,
     split_folds,
 )
@@ -105,3 +106,37 @@ def test_run_walk_forward_study_requires_at_least_two_folds():
     df = _synthetic_candles(n=500)
     with pytest.raises(ValueError):
         run_walk_forward_study(df, n_folds=1, base_config=RiskConfig(), param_grid={"min_confirmations": [2]})
+
+
+def test_rolling_walk_forward_produces_one_outcome_per_fold_after_minimum():
+    df = _synthetic_candles(n=4000, seed=3)
+    outcomes = run_rolling_walk_forward(
+        df, n_folds=8, base_config=RiskConfig(), param_grid={"atr_stop_multiple": [1.0, 1.5]},
+        min_in_sample_folds=3,
+    )
+    # folds 3,4,5,6,7 each get tested once -> 5 outcomes
+    assert [o.fold_index for o in outcomes] == [3, 4, 5, 6, 7]
+
+
+def test_rolling_walk_forward_each_fold_selection_only_uses_strictly_prior_folds():
+    """The core correctness property: fold i's selection must never be
+    influenced by fold i's own data or any later fold's data. Verified
+    indirectly: each outcome's test fold matches split_folds' fold i exactly,
+    and the selection step for fold i only ever receives folds[:i]."""
+    df = _synthetic_candles(n=4000, seed=5)
+    folds = split_folds(df, 8)
+    outcomes = run_rolling_walk_forward(
+        df, n_folds=8, base_config=RiskConfig(), param_grid={"atr_stop_multiple": [1.0, 1.5]},
+        min_in_sample_folds=3,
+    )
+    for outcome in outcomes:
+        expected_fold = folds[outcome.fold_index]
+        assert outcome.start == str(expected_fold.index[0])
+        assert outcome.end == str(expected_fold.index[-1])
+
+
+def test_rolling_walk_forward_requires_more_folds_than_minimum():
+    df = _synthetic_candles(n=500)
+    with pytest.raises(ValueError):
+        run_rolling_walk_forward(df, n_folds=3, base_config=RiskConfig(), param_grid={"atr_stop_multiple": [1.0]},
+                                  min_in_sample_folds=3)

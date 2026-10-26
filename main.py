@@ -2,19 +2,26 @@
 """Gold (XAU/USD) automated trading system — demo/paper-trading only.
 
 Usage:
-    python main.py backtest     [--bars N] [--granularity M15]
-    python main.py walk-forward [--bars N] [--granularity M15] [--folds 6]
-    python main.py demo         [--broker simulated|oanda]
+    python main.py backtest         [--bars N] [--granularity M15]
+    python main.py walk-forward     [--bars N] [--granularity M15] [--folds 6]
+    python main.py rolling-wf       [--bars N] [--granularity M15] [--folds 10] [--min-in-sample 3]
+    python main.py demo             [--broker simulated|oanda]
 
 `backtest` replays historical candles bar-by-bar through the exact same
 signal engine, risk manager, and sizing math the demo loop uses, and
 prints a performance report. Run this first and look hard at the numbers
 before trusting anything else here.
 
-`walk-forward` is the honest way to ask "does this strategy have real
-edge, or did one backtest just get lucky": it splits history into folds,
-grid-searches a few config knobs on all but the last fold, then reports
-performance ONLY on that final held-out fold, which the search never saw.
+`walk-forward` is a single in-sample/held-out split: it splits history
+into folds, grid-searches a few config knobs on all but the last fold,
+then reports performance ONLY on that final held-out fold. Good for a
+quick check, but it's one data point -- don't trust a single split any
+more than a single ordinary backtest.
+
+`rolling-wf` is the fuller version: it repeats that same split many times,
+sliding forward one fold at a time (fold i is tested using a config chosen
+from only folds before it), so a finding has to repeat across several
+independent out-of-sample folds to be believed, not just show up once.
 See gold_trader/research/walk_forward.py for why this matters.
 
 `demo` runs continuously against either:
@@ -39,7 +46,7 @@ from gold_trader.config import settings
 from gold_trader.data.providers import OandaDataProvider, YFinanceDataProvider
 from gold_trader.execution.broker import OandaPracticeBroker, SimulatedBroker
 from gold_trader.logging_config import setup_logging
-from gold_trader.research.walk_forward import run_walk_forward_study
+from gold_trader.research.walk_forward import run_rolling_walk_forward, run_walk_forward_study
 from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
 from gold_trader.sentiment.cot_data import PointInTimeCotLookup
@@ -81,7 +88,9 @@ WALK_FORWARD_PARAM_GRID = {
     "min_confirmations": [2, 3],
     "atr_stop_multiple": [1.0, 1.5, 2.0],
     "reward_risk_ratio": [1.0, 1.5, 2.0],
-    "enable_cot_filter": [False, True],
+    # enable_cot_filter deliberately left out: already tested (see README) and found to
+    # consistently hurt results, so re-testing it on every run here would waste compute
+    # re-confirming a settled, negative finding instead of researching open questions.
 }
 
 
@@ -131,6 +140,50 @@ def cmd_walk_forward(args: argparse.Namespace) -> None:
         "data. If it's not meaningfully better than the default, the grid\n"
         "search found no real edge here -- report that honestly rather than\n"
         "widening the grid until something sticks."
+    )
+
+
+# Narrower than WALK_FORWARD_PARAM_GRID on purpose: rolling-wf re-runs a grid search once
+# per fold, so a wide grid gets expensive fast. Point it at one specific question (does
+# changing this knob actually help, repeated across many independent folds) rather than
+# an open-ended search -- open-ended search belongs in `walk-forward`, not here.
+ROLLING_WF_PARAM_GRID = {
+    "atr_stop_multiple": [1.0, 1.5, 2.0],
+}
+
+
+def cmd_rolling_wf(args: argparse.Namespace) -> None:
+    logger.info("Fetching historical %s candles for rolling walk-forward study...", args.granularity)
+    provider = YFinanceDataProvider()
+    candles = provider.get_historical_candles(args.granularity, args.bars)
+    logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
+
+    outcomes = run_rolling_walk_forward(
+        candles, n_folds=args.folds, base_config=settings.risk,
+        param_grid=ROLLING_WF_PARAM_GRID, starting_balance=settings.starting_demo_balance,
+        min_in_sample_folds=args.min_in_sample,
+    )
+
+    wins = 0
+    print("\n" + "=" * 70)
+    print(f" ROLLING WALK-FORWARD: {len(outcomes)} independent out-of-sample folds")
+    print("=" * 70)
+    for o in outcomes:
+        d, s = o.default_report, o.selected_report
+        better = s.sharpe_like > d.sharpe_like
+        wins += better
+        print(
+            f"Fold {o.fold_index} [{o.start} -> {o.end}] selected={o.selected_params or 'same as default'}\n"
+            f"  default : return={d.total_return_pct:+6.2f}% trades={d.num_trades:3d} "
+            f"win_rate={d.win_rate:.1%} pf={d.profit_factor:.2f} sharpe={d.sharpe_like:+.2f} maxdd={d.max_drawdown_pct:.2f}%\n"
+            f"  selected: return={s.total_return_pct:+6.2f}% trades={s.num_trades:3d} "
+            f"win_rate={s.win_rate:.1%} pf={s.profit_factor:.2f} sharpe={s.sharpe_like:+.2f} maxdd={s.max_drawdown_pct:.2f}%  "
+            f"{'BETTER' if better else 'not better'}"
+        )
+    print(f"\nSelected config beat the default on {wins}/{len(outcomes)} independent out-of-sample folds.")
+    print(
+        "A result here only means something if it repeats across most folds.\n"
+        "One or two wins out of many is noise, not a finding."
     )
 
 
@@ -294,6 +347,13 @@ def main() -> None:
     wf.add_argument("--granularity", default=settings.candle_granularity)
     wf.add_argument("--folds", type=int, default=6)
     wf.set_defaults(func=cmd_walk_forward)
+
+    rwf = sub.add_parser("rolling-wf", help="Rolling walk-forward: many independent out-of-sample folds.")
+    rwf.add_argument("--bars", type=int, default=13000)
+    rwf.add_argument("--granularity", default=settings.candle_granularity)
+    rwf.add_argument("--folds", type=int, default=10)
+    rwf.add_argument("--min-in-sample", type=int, default=3)
+    rwf.set_defaults(func=cmd_rolling_wf)
 
     demo = sub.add_parser("demo", help="Run the continuous demo/paper-trading loop.")
     demo.add_argument("--broker", choices=["simulated", "oanda"], default="simulated")

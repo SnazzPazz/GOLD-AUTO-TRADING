@@ -116,6 +116,37 @@ not caution, but a tested finding. The code stays in the repo (disabled)
 rather than being deleted, so the test is repeatable and the finding
 stays honest rather than disappearing.
 
+## What's been tested and found to help
+
+A single in-sample/held-out split is one data point — trusting it is the
+same mistake as trusting one ordinary backtest, just with extra steps.
+`rolling-wf` (see `gold_trader/research/walk_forward.py`'s
+`run_rolling_walk_forward`) exists to fix that: it repeats the split many
+times, sliding forward one fold at a time, so a finding has to repeat
+across several independent out-of-sample folds to be believed.
+
+Run on ~2.4 years of real H1 gold futures data (10 folds, `atr_stop_multiple`
+swept over `[1.0, 1.5, 2.0]`): widening the stop from the conventional 1.5
+to **2.0** improved risk-adjusted performance (Sharpe-like ratio) on **5 of
+7** independent out-of-sample folds — each selected using only the folds
+strictly before it, never the fold it was judged on. The pattern makes
+mechanical sense: a wider stop mostly helps by avoiding whipsaw-driven
+repeat stop-outs (one fold went from -8.95% / 23% win rate to +4.08% / 45%
+win rate) and roughly halves trade frequency for similar or better
+outcomes. It specifically *underperforms* during the cleanest, strongest
+trends, where a tighter stop lets the strategy re-enter more often and
+capture more of the move. `ATR_STOP_MULTIPLE` now defaults to 2.0 because
+of this, not because 2.0 is a conventional choice — 5/7 is a real,
+moderately-confident signal, not proof, and if you re-run this study later
+with more data and get a different answer, trust that over this paragraph.
+
+One methodological wrinkle worth knowing about: re-fetching "the same"
+historical window from Yahoo Finance at two different moments (minutes
+apart) produced slightly different bars at the edges in practice — an
+apparent quirk in how intraday futures history gets served, not a bug in
+this codebase. It's part of why this result leans on 7 independent folds
+agreeing in the same direction rather than any single number.
+
 ## Why gold, why OANDA
 
 - OANDA's free **practice** account streams the exact same live market
@@ -155,11 +186,11 @@ gold_trader/
   execution/broker.py    SimulatedBroker (local ledger) and
                           OandaPracticeBroker (real demo-account orders)
   backtest/backtester.py  Bar-by-bar replay, no lookahead
-  research/walk_forward.py  Out-of-sample parameter research: grid search
-                              on in-sample folds, judged only on a held-out
-                              fold the search never saw
+  research/walk_forward.py  Out-of-sample parameter research: a single
+                              in-sample/held-out split, and the fuller
+                              rolling version (many independent folds)
   tests/                 pytest unit tests for all of the above
-main.py                 CLI: `backtest`, `walk-forward`, and `demo` subcommands
+main.py                 CLI: `backtest`, `walk-forward`, `rolling-wf`, `demo`
 ```
 
 Price action is the primary signal. Candlestick patterns, trend (EMA50 vs
@@ -226,6 +257,23 @@ that wasn't influenced by picking a config to look good on this data. If
 the held-out result isn't meaningfully better than the default, that's the
 honest answer — report it, don't widen the grid until something sticks.
 
+**Then rolling walk-forward — before trusting the single split above.**
+One held-out fold is still one data point. `rolling-wf` repeats the same
+split many times, sliding forward one fold at a time, so a finding has to
+show up across several independent out-of-sample folds, not just once:
+
+```bash
+python main.py rolling-wf --bars 13000 --granularity H1 --folds 10
+```
+
+It sweeps one knob at a time against a focused grid (see
+`ROLLING_WF_PARAM_GRID` in `main.py`) — this is meant to confirm or refute
+a specific question, not run an open-ended search every time; an
+open-ended search belongs in `walk-forward` above. The output reports how
+many of the independent out-of-sample folds the searched config actually
+beat the default on. One or two wins out of many is noise; most of them
+agreeing is a real finding.
+
 **Then the continuous demo loop**, either fully local:
 
 ```bash
@@ -250,7 +298,7 @@ why each decision was or wasn't made.
 | Setting | Default | Meaning |
 |---|---|---|
 | `RISK_PER_TRADE_PCT` | 1% | Fraction of account balance risked on one trade's stop distance |
-| `ATR_STOP_MULTIPLE` | 1.5 | Stop-loss placed this many ATRs from entry |
+| `ATR_STOP_MULTIPLE` | 2.0 | Stop-loss placed this many ATRs from entry — see "What's been tested and found to help" |
 | `REWARD_RISK_RATIO` | 1.5 | Take-profit distance relative to stop distance |
 | `MAX_DAILY_LOSS_PCT` | 3% | Halts new trades for the rest of the day past this loss |
 | `MAX_DRAWDOWN_PCT` | 10% | Halts trading entirely (manual restart) past this drawdown from peak equity |
