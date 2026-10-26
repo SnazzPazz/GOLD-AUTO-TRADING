@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal as signal_module  # cmd_demo's own trading Signal objects are called `signal`
 import time
 
 from gold_trader import decision_log, status
@@ -378,6 +379,18 @@ def cmd_demo(args: argparse.Namespace) -> None:
                 trades_today=risk_mgr.trades_today,
             )
         )
+
+    def _handle_sigterm(signum, frame) -> None:
+        # Translated into the same KeyboardInterrupt path Ctrl-C already takes, so
+        # `systemctl stop` (which sends SIGTERM, not SIGINT) logs a clean "stopped by
+        # user" message with final equity instead of the process just vanishing
+        # mid-cycle with no record of why. Harmless either way for correctness --
+        # status.json/decision_log are already written atomically/every cycle
+        # regardless of how the process ends -- this is purely about leaving a clear
+        # record of a deliberate stop.
+        raise KeyboardInterrupt
+
+    signal_module.signal(signal_module.SIGTERM, _handle_sigterm)
 
     logger.info(
         "Starting DEMO loop | broker=%s | instrument=%s | granularity=%s | poll=%ss",

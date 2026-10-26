@@ -35,7 +35,9 @@ circuit breaker has tripped.
    python main.py status              # the bot's own view of itself
    ```
 5. Stop it: `sudo systemctl stop gold-trader` (and `disable` to stop it
-   starting on boot).
+   starting on boot). `systemctl stop` sends SIGTERM, which `main.py demo`
+   now handles the same way as Ctrl-C -- a clean shutdown log line with
+   final equity, not just the process vanishing.
 
 If it keeps failing to start, `systemctl status` will show
 `Start request repeated too quickly` once it hits the 5-failures-in-10-minutes
