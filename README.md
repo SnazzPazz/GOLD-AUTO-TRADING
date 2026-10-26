@@ -147,6 +147,29 @@ apparent quirk in how intraday futures history gets served, not a bug in
 this codebase. It's part of why this result leans on 7 independent folds
 agreeing in the same direction rather than any single number.
 
+The same rolling procedure was also run against `reward_risk_ratio`
+(`[1.0, 1.5, 2.0, 2.5]`) and `min_confirmations` (`[2, 3, 4]`), using the
+new `ATR_STOP_MULTIPLE=2.0` as the base. Neither improved on the shipped
+defaults: `reward_risk_ratio=1.5` won or tied in every one of the 7
+in-sample selections (0/7 improvement found on the held-out folds), and
+`min_confirmations=2` beat only 1/7, with one fold notably worse
+(-8.32% vs. the default's +4.78%) when the search picked 3. Both stay at
+their current defaults — tested and confirmed, not just assumed.
+
+With all three defaults as currently shipped, the 7 genuinely
+out-of-sample folds above (Feb 2025 – Oct 2026, ~20.5 months) were **all
+profitable**. Chained sequentially (each fold's ending balance feeding the
+next), that's +60.8% cumulative, equivalent to roughly 32%/year compounded
+— but one fold alone (+27.58%) accounts for most of it; the other six
+chain to +26.0% over ~17.5 months (equivalent to roughly 18%/year)
+without it. The earliest 3 folds in the full dataset (June–Nov 2024)
+weren't put through this blind out-of-sample procedure — there wasn't yet
+enough prior history to select from — so they're reported separately:
+checked against the same final defaults, 2 of 3 were profitable
+(-2.96%, +11.63%, +4.62%). Take all of this as the most rigorously-earned
+picture available right now, not as a guarantee — it's built from real
+history, but it's still one real history, and markets change regimes.
+
 ## Why gold, why OANDA
 
 - OANDA's free **practice** account streams the exact same live market
