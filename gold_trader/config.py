@@ -118,7 +118,16 @@ class Settings:
     # timeframe. See README "What's been tested and found not to help".
     candle_granularity: str = field(default_factory=lambda: os.getenv("CANDLE_GRANULARITY", "H1"))
 
-    enable_sentiment: bool = field(default_factory=lambda: _get_bool("ENABLE_SENTIMENT", True))
+    # Off by default, for the same reason COT shipped off until tested: this project's own
+    # standard is "don't assume a data source helps just because it sounds reasonable."
+    # Unlike COT, sentiment hasn't been tested and found harmful -- it hasn't been tested
+    # at all, because validating it needs real point-in-time sentiment history
+    # (sentiment/history.py) that only accumulates by running the live loop over real time;
+    # there's no way to backdate it honestly (free RSS feeds have no historical archive).
+    # It defaulted to True for a while with zero validation, which was the inconsistency,
+    # not a verdict on sentiment itself. Turn it on once you're willing to run the live
+    # loop for a while and then re-test with python main.py rolling-wf.
+    enable_sentiment: bool = field(default_factory=lambda: _get_bool("ENABLE_SENTIMENT", False))
 
     risk: RiskConfig = field(default_factory=RiskConfig)
 

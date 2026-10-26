@@ -7,6 +7,7 @@ Usage:
     python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3]
     python main.py stress-test      [--bars N] [--granularity H1] [--paths 50] [--block-size 120]
     python main.py demo             [--broker simulated|oanda]
+    python main.py status
 
 `backtest` replays historical candles bar-by-bar through the exact same
 signal engine, risk manager, and sizing math the demo loop uses, and
@@ -50,6 +51,14 @@ not evidence. See gold_trader/research/stress_test.py.
 Live trading is intentionally not a mode this CLI offers. See README.md
 and gold_trader/config.py for why, and what a deliberate opt-in would
 require.
+
+`status` reads logs/status.json, written by the demo loop after every
+poll cycle, and reports whether it's actually running (vs. stalled or
+crashed, judged by how long ago the file was last updated), current
+equity, open-position state, and -- most importantly -- whether any
+circuit breaker has halted trading and which one. No credentials needed;
+this is purely local file state, meant for checking on the bot without
+reading raw logs.
 """
 from __future__ import annotations
 
@@ -57,7 +66,7 @@ import argparse
 import logging
 import time
 
-from gold_trader import decision_log
+from gold_trader import decision_log, status
 from gold_trader.backtest.backtester import run_backtest
 from gold_trader.config import settings
 from gold_trader.data.providers import OandaDataProvider, YFinanceDataProvider
@@ -234,6 +243,60 @@ def cmd_stress_test(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_status(args: argparse.Namespace) -> None:
+    snapshot = status.read_status()
+    if snapshot is None:
+        print(
+            "No status file found (logs/status.json). Either the demo loop has\n"
+            "never been run, or it was run before the `status` command existed.\n"
+            "Run `python main.py demo` and check again after at least one poll cycle."
+        )
+        return
+
+    stale = status.is_stale(snapshot)
+    age_seconds = time.time() - snapshot.updated_at
+
+    print("\n" + "=" * 60)
+    print(" DEMO LOOP STATUS")
+    print("=" * 60)
+    print(f"Last updated:    {age_seconds:.0f}s ago"
+          + (" -- STALE: loop may have stopped or crashed" if stale else " (healthy)"))
+    print(f"Broker:          {snapshot.broker}")
+    print(f"Instrument:      {snapshot.instrument} ({snapshot.granularity})")
+    print(f"Cycle count:     {snapshot.cycle_count}")
+    print(f"Equity:          {snapshot.equity:.2f}")
+    print(f"Open position:   {snapshot.open_position}")
+    print(f"Trades today:    {snapshot.trades_today}")
+    print(f"Last action:     {snapshot.last_action}"
+          + (f" ({snapshot.last_signal_direction}, confidence={snapshot.last_signal_confidence:.2f})"
+             if snapshot.last_signal_direction else ""))
+    print(f"Can trade now:   {snapshot.can_trade}")
+    if not snapshot.can_trade:
+        print(f"Halt reason:     {snapshot.halt_reason}")
+        print(
+            f"Halt flags:      halted_for_day={snapshot.halted_for_day} "
+            f"halted_permanently={snapshot.halted_permanently} "
+            f"halted_catastrophically={snapshot.halted_catastrophically}"
+        )
+        if snapshot.halted_catastrophically:
+            print(
+                "\nThis is the hard, non-routine halt (see README/config.py\n"
+                "cumulative_drawdown_halt_pct). Clearing it requires a deliberate\n"
+                "acknowledge_catastrophic_loss_and_reset() call, not just restarting\n"
+                "the loop or waiting -- review what happened before clearing it."
+            )
+        elif snapshot.halted_permanently:
+            print(
+                "\nOrdinary max-drawdown halt. Review what happened; it clears via\n"
+                "RiskManager.review_and_reset() (currently only reachable by editing\n"
+                "the running process/restarting with that call wired in -- there is\n"
+                "no CLI command for this yet, by design: it's meant to require a\n"
+                "deliberate look at what happened, not a one-line reflex)."
+            )
+        elif snapshot.halted_for_day:
+            print("\nDaily-loss halt. Clears automatically at the next calendar day.")
+
+
 def cmd_demo(args: argparse.Namespace) -> None:
     if args.broker == "oanda" and not settings.has_oanda_credentials:
         logger.error(
@@ -261,6 +324,38 @@ def cmd_demo(args: argparse.Namespace) -> None:
     risk_mgr = RiskManager(settings.risk)
     risk_mgr.start_of_day(broker.get_account_balance())
     risk_mgr.update_equity(broker.get_account_balance())
+    cycle_count = 0
+
+    def _write_status(
+        equity: float,
+        open_positions: int,
+        can_trade: bool,
+        halt_reason: str | None,
+        last_action: str,
+        last_signal_direction: str | None = None,
+        last_signal_confidence: float | None = None,
+    ) -> None:
+        status.write_status(
+            status.StatusSnapshot(
+                updated_at=time.time(),
+                broker=args.broker,
+                instrument=settings.instrument,
+                granularity=settings.candle_granularity,
+                poll_interval_seconds=settings.poll_interval_seconds,
+                cycle_count=cycle_count,
+                equity=equity,
+                open_position=bool(open_positions),
+                can_trade=can_trade,
+                halt_reason=halt_reason,
+                halted_for_day=risk_mgr.halted_for_day,
+                halted_permanently=risk_mgr.halted_permanently,
+                halted_catastrophically=risk_mgr.halted_catastrophically,
+                last_action=last_action,
+                last_signal_direction=last_signal_direction,
+                last_signal_confidence=last_signal_confidence,
+                trades_today=risk_mgr.trades_today,
+            )
+        )
 
     logger.info(
         "Starting DEMO loop | broker=%s | instrument=%s | granularity=%s | poll=%ss",
@@ -270,6 +365,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
 
     try:
         while True:
+            cycle_count += 1
             candles = data_provider.get_historical_candles(settings.candle_granularity, 400)
             enriched = se.prepare(candles)
             latest_price = data_provider.get_latest_price()
@@ -299,6 +395,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
                     reasons=[halt_reason or ""], approved=False, rejection_reason=halt_reason, action="halted",
                 )
                 logger.info("Equity: %.2f | open_position=%s", equity, bool(open_positions))
+                _write_status(equity, open_positions, can_trade, halt_reason, last_action="halted")
                 time.sleep(settings.poll_interval_seconds)
                 continue
 
@@ -310,6 +407,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
                     reasons=[regime.reason or ""], approved=False, rejection_reason=regime.reason, action="rejected",
                 )
                 logger.info("Equity: %.2f | open_position=%s", equity, bool(open_positions))
+                _write_status(equity, open_positions, can_trade, halt_reason, last_action="regime_skip")
                 time.sleep(settings.poll_interval_seconds)
                 continue
 
@@ -331,6 +429,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
             )
 
             if signal.direction is se.Direction.FLAT:
+                last_action = "flat"
                 decision_log.record_decision(
                     timestamp=now_iso, price=signal.price, direction="FLAT", confidence=0.0,
                     reasons=signal.reasons, approved=True, rejection_reason=None, action="flat",
@@ -344,12 +443,14 @@ def cmd_demo(args: argparse.Namespace) -> None:
                 approval = gate.check_slippage(plan, latest_price) if plan else None
 
                 if plan is None:
+                    last_action = "rejected"
                     decision_log.record_decision(
                         timestamp=now_iso, price=signal.price, direction=signal.direction.value,
                         confidence=signal.confidence, reasons=signal.reasons, approved=False,
                         rejection_reason="risk manager could not size a valid trade", action="rejected",
                     )
                 elif not approval.approved:
+                    last_action = "rejected"
                     logger.info("Trade rejected by approval gate: %s", approval.reason)
                     decision_log.record_decision(
                         timestamp=now_iso, price=signal.price, direction=signal.direction.value,
@@ -357,6 +458,7 @@ def cmd_demo(args: argparse.Namespace) -> None:
                         rejection_reason=approval.reason, action="rejected",
                     )
                 else:
+                    last_action = "opened"
                     broker.open_position(plan)
                     risk_mgr.record_trade_opened()
                     logger.info(
@@ -371,6 +473,10 @@ def cmd_demo(args: argparse.Namespace) -> None:
                     )
 
             logger.info("Equity: %.2f | open_position=%s", equity, bool(open_positions))
+            _write_status(
+                equity, open_positions, can_trade, halt_reason, last_action=last_action,
+                last_signal_direction=signal.direction.value, last_signal_confidence=signal.confidence,
+            )
             time.sleep(settings.poll_interval_seconds)
     except KeyboardInterrupt:
         logger.info("Demo loop stopped by user. Final equity: %.2f", broker.get_account_balance())
@@ -414,6 +520,9 @@ def main() -> None:
     demo = sub.add_parser("demo", help="Run the continuous demo/paper-trading loop.")
     demo.add_argument("--broker", choices=["simulated", "oanda"], default="simulated")
     demo.set_defaults(func=cmd_demo)
+
+    stat = sub.add_parser("status", help="Show the demo loop's last-known status (reads logs/status.json).")
+    stat.set_defaults(func=cmd_status)
 
     args = parser.parse_args()
     args.func(args)
