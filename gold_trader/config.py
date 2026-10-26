@@ -100,7 +100,15 @@ class Settings:
 
     starting_demo_balance: float = field(default_factory=lambda: _get_float("STARTING_DEMO_BALANCE", 10_000.0))
     poll_interval_seconds: int = field(default_factory=lambda: _get_int("POLL_INTERVAL_SECONDS", 60))
-    candle_granularity: str = field(default_factory=lambda: os.getenv("CANDLE_GRANULARITY", "M15"))
+    # H1, not the finer-grained M15 this shipped with earlier: every validated parameter
+    # (ATR_STOP_MULTIPLE, REWARD_RISK_RATIO, MIN_CONFIRMATIONS) was tested on H1 data via
+    # rolling walk-forward. Checking those same defaults against M15 data (no new fitting,
+    # a pure generalization check) found 3 of 5 recent folds negative -- the validated edge
+    # does not hold up on M15. Nothing here has been properly validated at that granularity
+    # (yfinance's ~60-day cap on 15-minute history is too short for a rigorous rolling
+    # study), so defaulting to it would run on an untested, and so-far worse-looking,
+    # timeframe. See README "What's been tested and found not to help".
+    candle_granularity: str = field(default_factory=lambda: os.getenv("CANDLE_GRANULARITY", "H1"))
 
     enable_sentiment: bool = field(default_factory=lambda: _get_bool("ENABLE_SENTIMENT", True))
 

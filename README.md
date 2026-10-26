@@ -116,6 +116,18 @@ not caution, but a tested finding. The code stays in the repo (disabled)
 rather than being deleted, so the test is repeatable and the finding
 stays honest rather than disappearing.
 
+**The default timeframe was also wrong, and that was a real bug, not a
+tuning choice.** Every validated parameter below was tested on H1 candles.
+`CANDLE_GRANULARITY` shipped as `M15` regardless — meaning the demo loop's
+actual default ran on a timeframe nothing had been validated against.
+Checking the validated H1 defaults directly against M15 data (no new
+fitting — a pure generalization check, since yfinance's ~60-day cap on
+15-minute history is too short to properly re-validate there) found 3 of 5
+recent M15 folds negative. The edge doesn't transfer. `CANDLE_GRANULARITY`
+now defaults to `H1`, matching the only timeframe with actual evidence
+behind it; changing it back to M15 or anything else means trading on an
+untested timeframe again, not an equivalent one.
+
 ## What's been tested and found to help
 
 A single in-sample/held-out split is one data point — trusting it is the
@@ -251,7 +263,7 @@ through the exact same signal engine, risk manager, and position-sizing
 math the live demo loop uses:
 
 ```bash
-python main.py backtest --bars 2000 --granularity M15
+python main.py backtest --bars 2000 --granularity H1
 ```
 
 Prints a report (win rate, profit factor, max drawdown, Sharpe-like

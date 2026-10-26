@@ -2,9 +2,9 @@
 """Gold (XAU/USD) automated trading system — demo/paper-trading only.
 
 Usage:
-    python main.py backtest         [--bars N] [--granularity M15]
-    python main.py walk-forward     [--bars N] [--granularity M15] [--folds 6]
-    python main.py rolling-wf       [--bars N] [--granularity M15] [--folds 10] [--min-in-sample 3]
+    python main.py backtest         [--bars N] [--granularity H1]
+    python main.py walk-forward     [--bars N] [--granularity H1] [--folds 6]
+    python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3]
     python main.py demo             [--broker simulated|oanda]
 
 `backtest` replays historical candles bar-by-bar through the exact same
