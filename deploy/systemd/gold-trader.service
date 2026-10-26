@@ -1,0 +1,35 @@
+[Unit]
+Description=Gold (XAU/USD) demo/paper-trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- Edit these three before installing ---
+# WorkingDirectory/ExecStart must point at your actual checkout and venv.
+WorkingDirectory=/home/YOUR_USER/GOLD-AUTO-TRADING
+User=YOUR_USER
+ExecStart=/home/YOUR_USER/GOLD-AUTO-TRADING/.venv/bin/python main.py demo --broker simulated
+
+# Loads OANDA_API_KEY etc. the same way .env does. systemd's EnvironmentFile
+# ignores blank lines and lines starting with # (same as .env.example), but
+# does NOT support quoted values -- if you quote anything in your real .env,
+# strip the quotes here or systemd will pass them through literally.
+EnvironmentFile=/home/YOUR_USER/GOLD-AUTO-TRADING/.env
+
+# Restart on crash, but don't loop forever on a real bug: if it fails 5
+# times within 10 minutes, stop retrying so the failure is visible
+# (`systemctl status gold-trader`) instead of silently restart-looping.
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Don't let a single wild bug (e.g. a runaway memory leak in a dependency)
+# take down the rest of the host.
+MemoryMax=1G
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

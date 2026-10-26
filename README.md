@@ -450,6 +450,27 @@ rejections, slippage rejections, halts) is also appended to
 `logs/decision_log.jsonl` as structured records, so you can audit exactly
 why each decision was or wasn't made.
 
+**Checking on it without reading raw logs:**
+
+```bash
+python main.py status
+```
+
+Reads `logs/status.json`, written by the demo loop after every poll cycle,
+and reports whether it's actually running (vs. stalled/crashed — judged by
+how long ago the file last updated), current equity, open-position state,
+and — most importantly — whether any circuit breaker has halted trading
+and which one. Purely a local file read; no credentials needed.
+
+**Running it unattended** (restart on crash, don't restart-loop forever on
+a real bug): see `deploy/README.md` for a systemd unit and a portable
+bash restart-loop script, whichever fits your machine. Research runs
+(`walk-forward`, `rolling-wf`, `stress-test`, and `backtest`) also accept
+`--cache-ttl-seconds` to cache the yfinance fetch to `data_cache/`, so
+repeated runs within that window use identical data instead of running
+into yfinance's known intraday non-reproducibility quirk (see
+`gold_trader/data/providers.py`).
+
 ## Risk management defaults (`.env`)
 
 | Setting | Default | Meaning |
