@@ -37,6 +37,7 @@ class BacktestReport:
     sharpe_like: float
     regime_rejections: int
     reviews_performed: int
+    catastrophically_halted: bool
     equity_curve: pd.Series
     trades: list
 
@@ -52,6 +53,7 @@ class BacktestReport:
             f"Sharpe-like ratio: {self.sharpe_like:.2f}\n"
             f"Regime-rejected:   {self.regime_rejections} signals skipped (abnormal volatility)\n"
             f"Reviews performed: {self.reviews_performed} (simulated human check-ins that cleared a halt)\n"
+            f"Catastrophically halted by the end: {self.catastrophically_halted}\n"
         )
 
 
@@ -120,7 +122,12 @@ def run_backtest(
             if last_review_day is None:
                 last_review_day = bar_day
             elif (bar_day - last_review_day).days >= review_interval_days:
-                if risk_mgr.halted_permanently:
+                # Routine review only clears the ordinary per-cycle halt. A catastrophic
+                # (cumulative, all-time-peak) halt is a different, more serious category
+                # on purpose -- it does not get swept up in the same routine check-in that
+                # clears ordinary drawdown halts, so it stops counting "reviews" here once
+                # that's the active halt (there's nothing routine left for review to do).
+                if risk_mgr.halted_permanently and not risk_mgr.halted_catastrophically:
                     risk_mgr.review_and_reset(broker.get_account_balance())
                     reviews_performed += 1
                 last_review_day = bar_day
@@ -198,6 +205,7 @@ def run_backtest(
         sharpe_like=sharpe_like,
         regime_rejections=regime_rejections,
         reviews_performed=reviews_performed,
+        catastrophically_halted=risk_mgr.halted_catastrophically,
         equity_curve=curve,
         trades=trades,
     )

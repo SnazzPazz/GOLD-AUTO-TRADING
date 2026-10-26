@@ -5,6 +5,7 @@ Usage:
     python main.py backtest         [--bars N] [--granularity H1] [--review-interval-days N]
     python main.py walk-forward     [--bars N] [--granularity H1] [--folds 6]
     python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3]
+    python main.py stress-test      [--bars N] [--granularity H1] [--paths 50] [--block-size 120]
     python main.py demo             [--broker simulated|oanda]
 
 `backtest` replays historical candles bar-by-bar through the exact same
@@ -29,6 +30,17 @@ from only folds before it), so a finding has to repeat across several
 independent out-of-sample folds to be believed, not just show up once.
 See gold_trader/research/walk_forward.py for why this matters.
 
+`stress-test` answers a different question than any of the above: not
+"does the signal have edge" but "how bad can it get." It runs the same
+config against many synthetic paths that never actually happened --
+block-bootstrap reshuffles of real history (same statistics, different
+sequence) plus three purpose-built adverse scenarios (a sustained crash,
+a volatility spike, a pure no-edge random walk) -- and reports the
+distribution of outcomes, especially the worst case. Use this to judge a
+circuit breaker like MAX_DRAWDOWN_PCT; judging a risk control by how it
+performed on the one history that already happened is survivorship bias,
+not evidence. See gold_trader/research/stress_test.py.
+
 `demo` runs continuously against either:
   - simulated: a local paper-trading ledger (no credentials needed).
   - oanda:     your OANDA *practice* account, which streams real live
@@ -51,6 +63,7 @@ from gold_trader.config import settings
 from gold_trader.data.providers import OandaDataProvider, YFinanceDataProvider
 from gold_trader.execution.broker import OandaPracticeBroker, SimulatedBroker
 from gold_trader.logging_config import setup_logging
+from gold_trader.research.stress_test import run_stress_test
 from gold_trader.research.walk_forward import run_rolling_walk_forward, run_walk_forward_study
 from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
@@ -192,6 +205,32 @@ def cmd_rolling_wf(args: argparse.Namespace) -> None:
     print(
         "A result here only means something if it repeats across most folds.\n"
         "One or two wins out of many is noise, not a finding."
+    )
+
+
+def cmd_stress_test(args: argparse.Namespace) -> None:
+    logger.info("Fetching historical %s candles for stress test...", args.granularity)
+    provider = YFinanceDataProvider()
+    candles = provider.get_historical_candles(args.granularity, args.bars)
+    logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
+
+    result = run_stress_test(
+        candles, settings.risk, n_bootstrap_paths=args.paths, block_size=args.block_size,
+        review_interval_days=args.review_interval_days, starting_balance=settings.starting_demo_balance,
+    )
+
+    print("\n" + "=" * 70)
+    print(f" STRESS TEST: {args.paths} synthetic paths that never actually happened")
+    print("=" * 70)
+    print(result.summary())
+    print(
+        "\nJudge MAX_DRAWDOWN_PCT and related settings by the worst-case line\n"
+        "above, not the mean/median return -- a circuit breaker's job is to\n"
+        "survive the paths that don't recover, and this is the only way to\n"
+        "see those, since the one real history we have already happened to\n"
+        "recover from everything in it. Looser settings will almost always\n"
+        "show a better *average* here too; that is not a reason to loosen\n"
+        "them -- check whether the worst case got meaningfully worse."
     )
 
 
@@ -363,6 +402,14 @@ def main() -> None:
     rwf.add_argument("--folds", type=int, default=10)
     rwf.add_argument("--min-in-sample", type=int, default=3)
     rwf.set_defaults(func=cmd_rolling_wf)
+
+    st = sub.add_parser("stress-test", help="Stress-test against synthetic adverse paths (see module docstring).")
+    st.add_argument("--bars", type=int, default=13000)
+    st.add_argument("--granularity", default=settings.candle_granularity)
+    st.add_argument("--paths", type=int, default=50)
+    st.add_argument("--block-size", type=int, default=120)
+    st.add_argument("--review-interval-days", type=int, default=30)
+    st.set_defaults(func=cmd_stress_test)
 
     demo = sub.add_parser("demo", help="Run the continuous demo/paper-trading loop.")
     demo.add_argument("--broker", choices=["simulated", "oanda"], default="simulated")

@@ -117,6 +117,55 @@ def test_review_and_reset_moves_drawdown_baseline_to_current_equity():
     assert rm.halted_permanently is True
 
 
+def test_review_and_reset_does_not_clear_catastrophic_halt():
+    """The core property the whole catastrophic-halt mechanism exists for:
+    repeated routine review_and_reset calls must not be able to paper over
+    a sustained bad patch that has, cumulatively, cost far more than any
+    single review cycle's limit."""
+    rm = make_risk_manager(max_drawdown_pct=0.10, cumulative_drawdown_halt_pct=0.25)
+    equity = 10_000
+    rm.update_equity(equity)
+
+    # Three successive ~12% hits, each "forgiven" by routine review -- cumulative
+    # loss compounds to ~32% even though no single cycle exceeded 10% by much.
+    for _ in range(3):
+        equity *= 0.88  # safely over the 10% per-cycle trigger with margin
+        rm.update_equity(equity)
+        assert rm.halted_permanently is True
+        rm.review_and_reset(current_equity=equity)
+        assert rm.halted_permanently is False
+
+    assert rm.halted_catastrophically is True
+    can_trade, reason = rm.can_trade(open_position_count=0)
+    assert can_trade is False
+    assert "cumulative" in reason.lower()
+
+    # Routine review must not be able to clear this one.
+    rm.review_and_reset(current_equity=equity)
+    assert rm.halted_catastrophically is True
+    can_trade_after_routine_review, _ = rm.can_trade(open_position_count=0)
+    assert can_trade_after_routine_review is False
+
+
+def test_acknowledge_catastrophic_loss_and_reset_clears_it():
+    rm = make_risk_manager(max_drawdown_pct=0.10, cumulative_drawdown_halt_pct=0.25)
+    rm.update_equity(10_000)
+    rm.update_equity(7_000)  # 30% drawdown in one shot -- past both thresholds at once
+    assert rm.halted_catastrophically is True
+
+    rm.acknowledge_catastrophic_loss_and_reset(current_equity=7_000)
+    assert rm.halted_catastrophically is False
+    assert rm.halted_permanently is False
+    can_trade, _ = rm.can_trade(open_position_count=0)
+    assert can_trade is True
+
+    # The all-time peak baseline resets too -- a further 25%+ drop from here
+    # should be able to trigger the catastrophic halt again, not be measured
+    # against the old, now-irrelevant pre-loss peak.
+    rm.update_equity(5_000)  # ~29% down from the new 7,000 baseline
+    assert rm.halted_catastrophically is True
+
+
 def test_max_concurrent_positions_blocks_new_trade():
     rm = make_risk_manager(max_concurrent_positions=1)
     can_trade, reason = rm.can_trade(open_position_count=1)

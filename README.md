@@ -234,6 +234,63 @@ but not 50%+ result. Reproduce with:
 python main.py backtest --bars 13723 --granularity H1 --review-interval-days 30
 ```
 
+## Stress-testing against paths that never happened
+
+Every result above, including the realistic review-cadence one, was
+judged against the one real history that actually occurred. That's fine
+for asking "does the signal have edge" — but it's the wrong way to judge
+a circuit breaker. A breaker's entire job is to limit damage on paths that
+*don't* recover, and a backtest over history that already happened can
+only ever contain paths that, in hindsight, either recovered or didn't.
+Loosening `MAX_DRAWDOWN_PCT` because it would have helped on the one path
+we can see (it would — see the table a few sections up) is survivorship
+bias dressed up as a risk decision.
+
+`gold_trader/research/stress_test.py` generates paths that never
+happened, two ways: **block-bootstrap resampling** (real historical bars
+cut into contiguous chunks and reassembled in a random order — same
+statistics as real history, different sequence, so it breaks the specific
+"this drawdown happened to recover" narrative) and three **purpose-built
+shock scenarios** (a sustained ~30% crash, a volatility spike, a pure
+no-edge random walk) for conditions the real 2024–2026 bull run never
+gave us a chance to observe at all.
+
+```bash
+python main.py stress-test --bars 13723 --granularity H1 --paths 50
+```
+
+Running 50 bootstrap paths against the (then-current) defaults found
+something real: **100% of paths exceeded the 10% `MAX_DRAWDOWN_PCT`
+ceiling** in realized worst-case drawdown, with a **median of 24.4%** and
+a **worst case of 47.7%** — not a rare tail event, the typical outcome
+under reshuffled conditions. The mechanism: `review_and_reset` moves the
+drawdown baseline to current equity on every review, so repeated bad
+review cycles each take another ~10% bite from an already-reduced
+balance, compounding multiplicatively (three successive 10% hits compound
+to ~27%, not 10%). The one real path we have just happened to need only
+3-4 review cycles with good recovery between them — that was sequencing
+luck, not a property the system actually guaranteed.
+
+**Fixed, not just reported.** Added a second, harder ceiling
+(`CUMULATIVE_DRAWDOWN_HALT_PCT`, default 25%) tracked from the account's
+true *all-time* peak, which ordinary periodic review cannot clear —
+clearing it requires `RiskManager.acknowledge_catastrophic_loss_and_reset`,
+a deliberately separate, non-routine action. Re-running the same 50
+bootstrap paths after the fix: worst-case drawdown dropped from **47.7%
+to 25.7%** (capped right where it should be), and worst-case total return
+improved from **-40.6% to -25.6%**. The average case got slightly
+*better* too (mean return +12.2%→+13.6%) — stopping a losing streak
+earlier freed capital that would otherwise keep eroding, so this wasn't a
+pure safety-for-return tradeoff. The one real historical path is
+unaffected (it never approaches 25% cumulative drawdown), so this cost
+nothing on the number already reported above — it only closes a gap that
+path never happened to expose.
+
+The three shock scenarios all stayed well-controlled even before this fix
+(5-7% worst-case drawdown, zero reviews needed) — this gap was specific
+to reshuffled real-history sequences compounding bad luck across multiple
+review cycles, not a general failure of the risk management.
+
 ## Why gold, why OANDA
 
 - OANDA's free **practice** account streams the exact same live market
@@ -276,8 +333,12 @@ gold_trader/
   research/walk_forward.py  Out-of-sample parameter research: a single
                               in-sample/held-out split, and the fuller
                               rolling version (many independent folds)
+  research/stress_test.py  Synthetic adverse paths (block-bootstrap +
+                             shock scenarios), for judging circuit breakers
+                             rather than parameters
   tests/                 pytest unit tests for all of the above
-main.py                 CLI: `backtest`, `walk-forward`, `rolling-wf`, `demo`
+main.py                 CLI: `backtest`, `walk-forward`, `rolling-wf`,
+                          `stress-test`, `demo`
 ```
 
 Price action is the primary signal. Candlestick patterns, trend (EMA50 vs
@@ -398,6 +459,7 @@ why each decision was or wasn't made.
 | `REWARD_RISK_RATIO` | 1.5 | Take-profit distance relative to stop distance |
 | `MAX_DAILY_LOSS_PCT` | 3% | Halts new trades for the rest of the day past this loss |
 | `MAX_DRAWDOWN_PCT` | 10% | Halts trading entirely (manual restart) past this drawdown from peak equity |
+| `CUMULATIVE_DRAWDOWN_HALT_PCT` | 25% | Harder ceiling from the account's all-time peak that routine review cannot clear — see "Stress-testing against paths that never happened" |
 | `MAX_CONCURRENT_POSITIONS` | 1 | Gold-only, so no pyramiding by default |
 | `MAX_LEVERAGE` | 10x | Hard cap on notional exposure vs. account balance |
 | `MAX_TRADES_PER_DAY` | 5 | Caps new positions per day to limit whipsaw in choppy conditions |

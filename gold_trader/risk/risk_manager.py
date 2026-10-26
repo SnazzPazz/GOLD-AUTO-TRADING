@@ -34,6 +34,18 @@ class RiskManager:
         self.trades_today = 0
         self._last_day = None
 
+        # Separate from peak_equity: this NEVER resets on an ordinary review, because
+        # review_and_reset exists to clear a single acute drawdown, not to repeatedly
+        # forgive a sustained bad patch. Stress-testing against synthetic reshuffled
+        # paths (gold_trader/research/stress_test.py) found that review_and_reset alone
+        # lets losses compound across cycles: three successive 10%-then-reviewed hits
+        # compound to ~27% cumulative loss, not 10% -- the real historical path just
+        # happened to need few enough review cycles, with good recovery between them,
+        # that this never showed up. This tracks true loss from the account's all-time
+        # high and halts for real (no routine-review path clears it) once it's severe.
+        self.all_time_peak_equity: float | None = None
+        self.halted_catastrophically = False
+
     def start_of_day(self, balance: float) -> None:
         self.day_start_balance = balance
         self.halted_for_day = False
@@ -67,14 +79,38 @@ class RiskManager:
         stays on the books; what resets is the drawdown baseline, now
         measured from this point forward rather than against the old peak
         that caused the halt. A further drop of the same magnitude from
-        here will trigger it again."""
+        here will trigger it again.
+
+        Deliberately does NOT clear `halted_catastrophically` -- that one
+        tracks loss from the account's true all-time peak across every
+        review cycle, precisely so routine review can't repeatedly forgive
+        a sustained bad patch into an unbounded cumulative loss. Clearing
+        that one goes through acknowledge_catastrophic_loss_and_reset
+        instead, a separate and deliberately not-routine action.
+        """
         self.halted_permanently = False
         self.peak_equity = current_equity
+        if not self.halted_catastrophically:
+            self.halt_reason = None
+
+    def acknowledge_catastrophic_loss_and_reset(self, current_equity: float) -> None:
+        """Clears `halted_catastrophically`. Separate from review_and_reset
+        on purpose: this halt means a sustained bad patch has already cost
+        far more than any single review cycle's limit, and clearing it
+        should be a deliberate, rare action, not something that happens as
+        a side effect of the same routine check-in that clears ordinary
+        drawdown halts."""
+        self.halted_catastrophically = False
+        self.halted_permanently = False
+        self.peak_equity = current_equity
+        self.all_time_peak_equity = current_equity
         self.halt_reason = None
 
     def update_equity(self, equity: float) -> None:
         if self.peak_equity is None or equity > self.peak_equity:
             self.peak_equity = equity
+        if self.all_time_peak_equity is None or equity > self.all_time_peak_equity:
+            self.all_time_peak_equity = equity
 
         if self.day_start_balance is not None:
             daily_loss_pct = (self.day_start_balance - equity) / self.day_start_balance
@@ -94,7 +130,20 @@ class RiskManager:
                     f"(limit {self.cfg.max_drawdown_pct:.1%}). Trading halted — manual review required."
                 )
 
+        if self.all_time_peak_equity:
+            cumulative_drawdown_pct = (self.all_time_peak_equity - equity) / self.all_time_peak_equity
+            if cumulative_drawdown_pct >= self.cfg.cumulative_drawdown_halt_pct:
+                self.halted_catastrophically = True
+                self.halt_reason = (
+                    f"Cumulative drawdown circuit breaker: down {cumulative_drawdown_pct:.1%} from the "
+                    f"account's all-time peak (limit {self.cfg.cumulative_drawdown_halt_pct:.1%}). "
+                    f"Trading halted -- this does not clear on routine review; the repeated ordinary "
+                    f"drawdown halt has been forgiven too many times without real recovery."
+                )
+
     def can_trade(self, open_position_count: int) -> tuple[bool, str | None]:
+        if self.halted_catastrophically:
+            return False, self.halt_reason
         if self.halted_permanently:
             return False, self.halt_reason
         if self.halted_for_day:

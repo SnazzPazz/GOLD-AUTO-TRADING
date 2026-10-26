@@ -51,6 +51,14 @@ class RiskConfig:
     max_daily_loss_pct: float = field(default_factory=lambda: _get_float("MAX_DAILY_LOSS_PCT", 0.03))
     # Trading halts entirely (manual reset required) once this fraction of peak equity is lost.
     max_drawdown_pct: float = field(default_factory=lambda: _get_float("MAX_DRAWDOWN_PCT", 0.10))
+    # A SEPARATE, harder ceiling tracked from the account's true all-time peak, which
+    # ordinary periodic review (RiskManager.review_and_reset) cannot clear -- only
+    # acknowledge_catastrophic_loss_and_reset can. Exists because stress-testing against
+    # synthetic reshuffled paths found that review_and_reset alone lets losses compound
+    # across repeated review cycles (three successive 10%-then-reviewed hits compound to
+    # ~27% cumulative, not 10%); this stops that compounding at a hard line instead of
+    # relying on the real historical path having gotten lucky with how few cycles it needed.
+    cumulative_drawdown_halt_pct: float = field(default_factory=lambda: _get_float("CUMULATIVE_DRAWDOWN_HALT_PCT", 0.25))
     # Gold-only system: at most this many concurrent open positions (1 = no pyramiding).
     max_concurrent_positions: int = field(default_factory=lambda: _get_int("MAX_CONCURRENT_POSITIONS", 1))
     # Refuse to size a trade beyond this leverage against account balance.
