@@ -12,6 +12,7 @@ patterns, strategy, backtester) never has to know which one is in use.
 """
 from __future__ import annotations
 
+import os
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -106,7 +107,16 @@ class YFinanceDataProvider(MarketDataProvider):
         if self.cache_dir is None or self.cache_ttl_seconds is None:
             return
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        df.to_csv(self._cache_path(interval, period))
+        cache_path = self._cache_path(interval, period)
+        # Write to a per-process temp file and rename (atomic on the same filesystem)
+        # rather than writing cache_path directly: two research commands started around
+        # the same time share the same cache key/file, and a direct write lets one
+        # process's to_csv() truncate the file while another's read_csv() is mid-read,
+        # corrupting it (reproduced directly: concurrent writers reliably produced
+        # pandas.errors.EmptyDataError on the reader side).
+        tmp_path = cache_path.with_name(f"{cache_path.name}.tmp.{os.getpid()}")
+        df.to_csv(tmp_path)
+        tmp_path.replace(cache_path)
 
     def _fetch_raw(self, interval: str, period: str) -> pd.DataFrame:
         import yfinance as yf

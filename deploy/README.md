@@ -45,8 +45,11 @@ file), not a bug in the service file. Fix the underlying problem, then
 
 ## Option B: plain restart-loop script (any OS with bash)
 
-No systemd, no install step, no sudo. Good for macOS, or a quick run on a
-Linux box you don't want to configure further.
+No systemd, no sudo. Good for macOS, or a quick run on a Linux box you
+don't want to configure further. If you've set up a project-local `.venv`
+(as the systemd option above assumes), this script activates it
+automatically; otherwise it falls back to whatever `python3` is on your
+PATH, so make sure that one has `requirements.txt` installed.
 
 ```bash
 ./deploy/run_demo_supervised.sh simulated   # or: oanda

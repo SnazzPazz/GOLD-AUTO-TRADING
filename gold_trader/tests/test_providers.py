@@ -1,3 +1,5 @@
+import multiprocessing as mp
+
 import pandas as pd
 import pytest
 
@@ -82,6 +84,39 @@ def test_different_tickers_use_separate_cache_files(tmp_path, monkeypatch):
     assert gold._cache_path("60m", "730d") != other._cache_path("60m", "730d")
     assert gold._cache_path("60m", "730d").exists()
     assert other._cache_path("60m", "730d").exists()
+
+
+class _FixedFakeProvider(YFinanceDataProvider):
+    """A real (picklable) subclass instead of monkeypatching _fetch_raw, so worker
+    processes in the multiprocessing test below each get a working fetch without
+    needing the parent's monkeypatch state."""
+
+    def _fetch_raw(self, interval: str, period: str) -> pd.DataFrame:
+        return _fake_raw_df(seed_value=1.0, n=500)
+
+
+def _concurrent_cache_worker(cache_dir_str: str) -> bool:
+    provider = _FixedFakeProvider(cache_dir=cache_dir_str, cache_ttl_seconds=3600)
+    for _ in range(5):
+        df = provider.get_historical_candles("H1", 100)
+        if len(df) != 100:
+            return False
+    return True
+
+
+def test_concurrent_cache_writes_do_not_corrupt_the_cache_file(tmp_path):
+    """Regression test for a real race: multiple research commands (e.g. backtest and
+    walk-forward started around the same time) share the same cache key/file. Before
+    _write_cache wrote atomically (temp file + rename), one process's to_csv() could
+    truncate the file while another's read_csv() was reading it mid-write, raising
+    pandas.errors.EmptyDataError -- reproduced directly with 8 racing processes before
+    this fix, on effectively every call."""
+    cache_dir_str = str(tmp_path)
+    with mp.Pool(processes=8) as pool:
+        results = pool.map(_concurrent_cache_worker, [cache_dir_str] * 8)
+
+    assert all(results), "a worker saw a corrupted/incomplete cache read"
+    assert not any(".tmp." in p.name for p in tmp_path.iterdir()), "a temp file was left behind"
 
 
 def test_cached_round_trip_preserves_tz_aware_datetime_index(tmp_path, monkeypatch):

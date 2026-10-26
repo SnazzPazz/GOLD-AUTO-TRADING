@@ -11,6 +11,15 @@ set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# If a project-local venv exists (deploy/systemd/gold-trader.service assumes one),
+# use it -- otherwise fall through to whatever `python3` is on PATH. Without this,
+# a venv-based setup run through this script instead of systemd would fail with
+# ModuleNotFoundError on every restart attempt rather than actually running the bot.
+if [[ -f ".venv/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source ".venv/bin/activate"
+fi
+
 BROKER="${1:-simulated}"
 MAX_FAILURES_IN_WINDOW=5
 FAILURE_WINDOW_SECONDS=600
