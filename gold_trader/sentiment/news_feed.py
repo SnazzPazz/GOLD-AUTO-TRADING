@@ -10,6 +10,11 @@ originate one by itself.
 Swap in a paid feed (NewsAPI, X/Twitter API, Reddit API, a commercial
 sentiment vendor) later by implementing the same `get_sentiment()`
 interface — nothing else in the system needs to change.
+
+Every fresh (non-cached) reading is appended to sentiment/history.py's
+point-in-time log, so a backtest run later can replay the exact sentiment
+this system observed in real time instead of never testing the sentiment
+path at all (see history.py's docstring for why that matters).
 """
 from __future__ import annotations
 
@@ -19,6 +24,8 @@ from dataclasses import dataclass
 import feedparser
 import requests
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+from gold_trader.sentiment import history as sentiment_history
 
 FEED_FETCH_TIMEOUT_SECONDS = 10
 
@@ -84,4 +91,5 @@ class NewsSentimentProvider:
             )
 
         self._cached = reading
+        sentiment_history.record(reading.score, reading.headline_count, as_of=reading.as_of)
         return reading

@@ -18,7 +18,9 @@ import pandas as pd
 
 from gold_trader.config import RiskConfig
 from gold_trader.execution.broker import SimulatedBroker
+from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
+from gold_trader.sentiment.history import PointInTimeSentimentLookup
 from gold_trader.strategy import signal_engine as se
 
 
@@ -32,6 +34,7 @@ class BacktestReport:
     profit_factor: float
     max_drawdown_pct: float
     sharpe_like: float
+    regime_rejections: int
     equity_curve: pd.Series
     trades: list
 
@@ -45,6 +48,7 @@ class BacktestReport:
             f"Profit factor:     {self.profit_factor:.2f}\n"
             f"Max drawdown:      {self.max_drawdown_pct:.2f}%\n"
             f"Sharpe-like ratio: {self.sharpe_like:.2f}\n"
+            f"Regime-rejected:   {self.regime_rejections} signals skipped (abnormal volatility)\n"
         )
 
 
@@ -53,15 +57,29 @@ def run_backtest(
     risk_config: RiskConfig,
     starting_balance: float = 10_000.0,
     warmup_bars: int = 210,
+    use_recorded_sentiment: bool = True,
 ) -> BacktestReport:
+    """`use_recorded_sentiment=True` replays point-in-time sentiment recorded
+    by the live demo loop (see sentiment/history.py) wherever it exists for
+    this period; bars before any recording started simply get no sentiment
+    input, same as if sentiment were disabled -- there is no way to
+    backdate it honestly, so this never guesses.
+    """
     broker = SimulatedBroker(starting_balance, spread_cost_per_unit=risk_config.spread_cost_per_unit)
     risk_mgr = RiskManager(risk_config)
     risk_mgr.start_of_day(starting_balance)
     risk_mgr.update_equity(starting_balance)
+    gate = PortfolioApprovalGate(
+        regime_lookback=risk_config.volatility_regime_lookback,
+        regime_low_percentile=risk_config.volatility_regime_low_percentile,
+        regime_high_percentile=risk_config.volatility_regime_high_percentile,
+    )
+    sentiment_lookup = PointInTimeSentimentLookup() if use_recorded_sentiment else None
 
     enriched = se.prepare(candles)
     equity_curve = []
     last_day = None
+    regime_rejections = 0
 
     for i in range(warmup_bars, len(enriched)):
         window = enriched.iloc[: i + 1]
@@ -83,7 +101,13 @@ def run_backtest(
         if not can_trade or open_positions:
             continue
 
-        signal = se.generate_signal(window)
+        regime = gate.check_volatility_regime(window["atr_14"])
+        if not regime.approved:
+            regime_rejections += 1
+            continue
+
+        sentiment_score = sentiment_lookup.score_at(window.index[-1].timestamp()) if sentiment_lookup else None
+        signal = se.generate_signal(window, sentiment_score=sentiment_score)
         if signal.direction is se.Direction.FLAT:
             continue
 
@@ -126,6 +150,7 @@ def run_backtest(
         profit_factor=profit_factor,
         max_drawdown_pct=max_dd,
         sharpe_like=sharpe_like,
+        regime_rejections=regime_rejections,
         equity_curve=curve,
         trades=trades,
     )

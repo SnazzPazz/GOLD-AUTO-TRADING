@@ -37,6 +37,49 @@ loop that trades a simulated or real OANDA **practice** account.
   erased by real bid/ask spread alone. Treat the backtest number as the
   honest floor, not the live result — real spreads vary and widen around
   news.
+- **No LLM agents here, by design.** Frameworks like
+  [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)
+  use a swarm of LLM-powered agents (analysts, bull/bear researchers, a
+  trader, a risk-management team, a portfolio manager) that debate every
+  decision. That's a different kind of system — it means an LLM API call,
+  real cost, and added latency on every signal. This project borrows the
+  *structural* ideas below without taking on that cost; if you want actual
+  LLM-driven reasoning layered on top later, that's a separate, deliberate
+  decision to make, not something to add quietly.
+
+## What this borrowed from TradingAgents, and why
+
+A few ideas from that framework's architecture and changelog turned out to
+apply directly here, without needing any LLM:
+
+- **Point-in-time data integrity.** TradingAgents' changelog lists look-ahead
+  fixes across nearly every data type it touches (news, social, fundamentals,
+  macro) — the discipline that a backtest must only ever see what was
+  actually knowable at that point in time. This project had exactly that bug:
+  the backtester never passed a sentiment score into the signal engine at
+  all, while the live demo loop always did, so the backtest never validated
+  the sentiment-dampening path the demo loop actually runs. Fixed by
+  `sentiment/history.py`: every live sentiment reading gets recorded with its
+  timestamp, and a backtest run afterward can replay the system's own
+  point-in-time sentiment history instead of silently skipping it. There's no
+  honest way to backdate sentiment before this file started recording — free
+  RSS feeds have no historical archive — so a backtest over an earlier period
+  still runs with no sentiment input, which is correct, not a bug.
+- **A final approval gate before execution**, mirroring the
+  Risk-Management-team-then-Portfolio-Manager sign-off that sits between
+  TradingAgents' Trader proposal and actual execution. `risk/approval_gate.py`
+  adds two checks neither the signal engine nor the risk manager made before:
+  a **volatility-regime filter** (skip trading when ATR is abnormally low —
+  too quiet for these patterns to mean anything — or abnormally high — an
+  unusual event where a standard stop multiple may not hold) and a
+  **slippage/staleness guard** (reject a trade if the live price has already
+  drifted too far from the signal's price by the time an order would go in,
+  since this system polls rather than streams).
+- **A persistent decision log** (`logs/decision_log.jsonl`), one line per
+  evaluation cycle in the live demo loop — not just the cycles that became
+  trades. Mirrors TradingAgents' own decision log: an auditable trail of
+  every signal, rejection, and halt with its reasoning, so "is this
+  reliable" can be checked against the record instead of a summary.
 
 ## Why gold, why OANDA
 
@@ -64,8 +107,14 @@ gold_trader/
   strategy/signal_engine.py  Combines trend + momentum + pattern + sentiment,
                               requires >=2 independent confirmations before
                               signaling LONG/SHORT
-  risk/risk_manager.py   Position sizing (risk % / ATR stop), daily-loss and
-                          max-drawdown circuit breakers, leverage cap
+  risk/
+    risk_manager.py       Position sizing (risk % / ATR stop), daily-loss and
+                           max-drawdown circuit breakers, leverage cap
+    approval_gate.py       Final pre-execution checks: volatility regime,
+                            slippage/staleness (see "What this borrowed...")
+  sentiment/history.py    Point-in-time sentiment log + lookup, for backtesting
+                           the sentiment path honestly (no retroactive guessing)
+  decision_log.py         Append-only JSONL record of every live-loop evaluation
   execution/broker.py    SimulatedBroker (local ledger) and
                           OandaPracticeBroker (real demo-account orders)
   backtest/backtester.py  Bar-by-bar walk-forward replay, no lookahead
@@ -129,8 +178,11 @@ python main.py demo --broker oanda
 ```
 
 Every signal, trade, and circuit-breaker event is logged to the console
-and to `logs/gold_trader.log` so you can audit exactly why each decision
-was made.
+and to `logs/gold_trader.log` in human-readable form, and every evaluation
+cycle (including the ones that didn't trade — flat signals, regime
+rejections, slippage rejections, halts) is also appended to
+`logs/decision_log.jsonl` as structured records, so you can audit exactly
+why each decision was or wasn't made.
 
 ## Risk management defaults (`.env`)
 
@@ -146,6 +198,9 @@ was made.
 | `MAX_TRADES_PER_DAY` | 5 | Caps new positions per day to limit whipsaw in choppy conditions |
 | `SPREAD_COST_PER_UNIT` | 0.30 | Approximate round-trip bid/ask cost charged on every simulated close, so results aren't flattered by frictionless fills |
 | `MIN_CONFIRMATIONS` | 2 | Independent signals (trend/momentum/pattern/Bollinger) required to agree before a trade fires |
+| `MAX_SLIPPAGE_ATR_MULTIPLE` | 0.5 | Rejects a trade if live price has drifted more than this many stop-distances from the signal price (stale-signal guard) |
+| `VOLATILITY_REGIME_LOOKBACK` | 100 | Bars of ATR history used to judge "normal" volatility |
+| `VOLATILITY_REGIME_LOW/HIGH_PERCENTILE` | 10 / 95 | Rejects trades when current ATR falls outside this percentile band of its own recent history |
 
 These are conservative starting points, not tuned recommendations — adjust
 them deliberately, and re-run the backtester after any change.

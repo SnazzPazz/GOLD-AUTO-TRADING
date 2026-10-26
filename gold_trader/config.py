@@ -59,6 +59,18 @@ class RiskConfig:
     # widens around news/thin liquidity; this is a conservative flat approximation, not a feed.
     spread_cost_per_unit: float = field(default_factory=lambda: _get_float("SPREAD_COST_PER_UNIT", 0.30))
 
+    # --- Approval-gate settings (final pre-execution checks, see risk/approval_gate.py) ---
+    # Reject a trade if the live price has drifted more than this many stop-distances away
+    # from the signal's price by the time execution would happen (stale-signal/slippage guard).
+    max_slippage_atr_multiple: float = field(default_factory=lambda: _get_float("MAX_SLIPPAGE_ATR_MULTIPLE", 0.5))
+    # Volatility-regime filter: how many recent bars of ATR history to judge "normal" against.
+    volatility_regime_lookback: int = field(default_factory=lambda: _get_int("VOLATILITY_REGIME_LOOKBACK", 100))
+    # Reject trades when current ATR falls below/above these percentiles of its own recent
+    # history: too quiet means the technical patterns are mostly noise; too wild means an
+    # unusual event (news release, liquidity gap) where a standard stop multiple may not hold.
+    volatility_regime_low_percentile: float = field(default_factory=lambda: _get_float("VOLATILITY_REGIME_LOW_PERCENTILE", 10.0))
+    volatility_regime_high_percentile: float = field(default_factory=lambda: _get_float("VOLATILITY_REGIME_HIGH_PERCENTILE", 95.0))
+
 
 @dataclass
 class Settings:

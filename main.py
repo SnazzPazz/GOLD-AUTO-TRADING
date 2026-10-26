@@ -26,11 +26,13 @@ import argparse
 import logging
 import time
 
+from gold_trader import decision_log
 from gold_trader.backtest.backtester import run_backtest
 from gold_trader.config import settings
 from gold_trader.data.providers import OandaDataProvider, YFinanceDataProvider
 from gold_trader.execution.broker import OandaPracticeBroker, SimulatedBroker
 from gold_trader.logging_config import setup_logging
+from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
 from gold_trader.sentiment.news_feed import NewsSentimentProvider
 from gold_trader.strategy import signal_engine as se
@@ -77,6 +79,12 @@ def cmd_demo(args: argparse.Namespace) -> None:
         else SimulatedBroker(settings.starting_demo_balance, spread_cost_per_unit=settings.risk.spread_cost_per_unit)
     )
     sentiment_provider = NewsSentimentProvider() if settings.enable_sentiment else None
+    gate = PortfolioApprovalGate(
+        max_slippage_atr_multiple=settings.risk.max_slippage_atr_multiple,
+        regime_lookback=settings.risk.volatility_regime_lookback,
+        regime_low_percentile=settings.risk.volatility_regime_low_percentile,
+        regime_high_percentile=settings.risk.volatility_regime_high_percentile,
+    )
 
     risk_mgr = RiskManager(settings.risk)
     risk_mgr.start_of_day(broker.get_account_balance())
@@ -113,28 +121,72 @@ def cmd_demo(args: argparse.Namespace) -> None:
 
             open_positions = 1 if broker.get_open_position() else 0
             can_trade, halt_reason = risk_mgr.can_trade(open_positions)
+            now_iso = enriched.index[-1].isoformat() if hasattr(enriched.index[-1], "isoformat") else str(enriched.index[-1])
 
             if not can_trade:
                 if halt_reason:
                     logger.warning("Trading halted: %s", halt_reason)
-            else:
-                sentiment_score = sentiment_provider.get_sentiment().score if sentiment_provider else None
-                signal = se.generate_signal(enriched, sentiment_score=sentiment_score)
+                decision_log.record_decision(
+                    timestamp=now_iso, price=latest_price, direction="FLAT", confidence=0.0,
+                    reasons=[halt_reason or ""], approved=False, rejection_reason=halt_reason, action="halted",
+                )
+                logger.info("Equity: %.2f | open_position=%s", equity, bool(open_positions))
+                time.sleep(settings.poll_interval_seconds)
+                continue
 
-                if signal.direction is not se.Direction.FLAT:
-                    logger.info(
-                        "Signal: %s (confidence=%.2f) price=%.2f | %s",
-                        signal.direction.value, signal.confidence, signal.price, "; ".join(signal.reasons),
+            regime = gate.check_volatility_regime(enriched["atr_14"])
+            if not regime.approved:
+                logger.info("Skipping this cycle: %s", regime.reason)
+                decision_log.record_decision(
+                    timestamp=now_iso, price=latest_price, direction="FLAT", confidence=0.0,
+                    reasons=[regime.reason or ""], approved=False, rejection_reason=regime.reason, action="rejected",
+                )
+                logger.info("Equity: %.2f | open_position=%s", equity, bool(open_positions))
+                time.sleep(settings.poll_interval_seconds)
+                continue
+
+            sentiment_score = sentiment_provider.get_sentiment().score if sentiment_provider else None
+            signal = se.generate_signal(enriched, sentiment_score=sentiment_score)
+
+            if signal.direction is se.Direction.FLAT:
+                decision_log.record_decision(
+                    timestamp=now_iso, price=signal.price, direction="FLAT", confidence=0.0,
+                    reasons=signal.reasons, approved=True, rejection_reason=None, action="flat",
+                )
+            else:
+                logger.info(
+                    "Signal: %s (confidence=%.2f) price=%.2f | %s",
+                    signal.direction.value, signal.confidence, signal.price, "; ".join(signal.reasons),
+                )
+                plan = risk_mgr.size_trade(signal, equity)
+                approval = gate.check_slippage(plan, latest_price) if plan else None
+
+                if plan is None:
+                    decision_log.record_decision(
+                        timestamp=now_iso, price=signal.price, direction=signal.direction.value,
+                        confidence=signal.confidence, reasons=signal.reasons, approved=False,
+                        rejection_reason="risk manager could not size a valid trade", action="rejected",
                     )
-                    plan = risk_mgr.size_trade(signal, equity)
-                    if plan:
-                        broker.open_position(plan)
-                        risk_mgr.record_trade_opened()
-                        logger.info(
-                            "Opened %s %d units @ %.2f | stop=%.2f target=%.2f | risking $%.2f",
-                            plan.direction.value, abs(plan.units), plan.entry_price,
-                            plan.stop_loss, plan.take_profit, plan.risk_amount,
-                        )
+                elif not approval.approved:
+                    logger.info("Trade rejected by approval gate: %s", approval.reason)
+                    decision_log.record_decision(
+                        timestamp=now_iso, price=signal.price, direction=signal.direction.value,
+                        confidence=signal.confidence, reasons=signal.reasons, approved=False,
+                        rejection_reason=approval.reason, action="rejected",
+                    )
+                else:
+                    broker.open_position(plan)
+                    risk_mgr.record_trade_opened()
+                    logger.info(
+                        "Opened %s %d units @ %.2f | stop=%.2f target=%.2f | risking $%.2f",
+                        plan.direction.value, abs(plan.units), plan.entry_price,
+                        plan.stop_loss, plan.take_profit, plan.risk_amount,
+                    )
+                    decision_log.record_decision(
+                        timestamp=now_iso, price=signal.price, direction=signal.direction.value,
+                        confidence=signal.confidence, reasons=signal.reasons, approved=True,
+                        rejection_reason=None, action="opened",
+                    )
 
             logger.info("Equity: %.2f | open_position=%s", equity, bool(open_positions))
             time.sleep(settings.poll_interval_seconds)
