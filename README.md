@@ -182,6 +182,30 @@ checked against the same final defaults, 2 of 3 were profitable
 picture available right now, not as a guarantee — it's built from real
 history, but it's still one real history, and markets change regimes.
 
+**Important correction to the figure above: that's not what running this
+system unsupervised for 2.4 years actually produces.** The 60.8% number
+chains each fold's result starting from a *fresh* risk-manager state —
+no carried-over drawdown, no carried-over daily-loss halt. That's the
+right way to ask "does the underlying signal have edge," but it quietly
+assumes something the system doesn't actually do: restart itself clean at
+each fold boundary. Run as one truly continuous backtest over the same
+2.4 years — no resets, nothing touched — `max_drawdown_pct`'s permanent
+halt triggered on **2024-09-06**, about 3 months in, and the system
+correctly did *zero* further trading for the remaining ~2.1 years, exactly
+as designed ("manual reset required" is not a suggestion). The honest
+total return for that run: **-9.84%**.
+
+This is not a bug, and the fix is not to weaken the circuit breaker so the
+number looks better — that would reintroduce exactly the unsupervised
+capital loss it exists to prevent. The real takeaway: this system is not
+built to be deployed and never looked at again. It's built to trade,
+protect capital aggressively when something goes wrong, and *stop and
+wait for a human* — which is exactly why `decision_log.py` and the
+approval gate exist, to make that review possible. Whatever return figure
+you take from this research, read it as "what the signal is capable of
+when conditions are reasonable," not as "what happens if you walk away for
+two years." Check in on it; that's the model this was built around.
+
 ## Why gold, why OANDA
 
 - OANDA's free **practice** account streams the exact same live market
@@ -270,6 +294,15 @@ Prints a report (win rate, profit factor, max drawdown, Sharpe-like
 ratio) and writes the equity curve to `reports/latest_backtest.csv`. Look
 hard at these numbers — a strategy with a poor profit factor or deep
 drawdown on history is not one to trust live, demo or otherwise.
+
+A large `--bars` value here runs one truly continuous backtest — no
+resets, risk-manager state (including the permanent drawdown halt)
+carried the whole way through, same as real unsupervised operation would.
+That's a different question from `walk-forward`/`rolling-wf` below, which
+deliberately give each fold a fresh state to isolate whether the
+underlying signal has edge. Both matter; see "What's been tested and
+found to help" for why they can tell very different stories about the
+same history.
 
 **Then walk-forward research — before trusting any single backtest number.**
 One backtest on one window tells you almost nothing: it's one sample, and

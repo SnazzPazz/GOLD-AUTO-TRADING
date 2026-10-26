@@ -55,6 +55,39 @@ def generate_signal(
     cot_extreme_high: float = 90.0,
 ) -> Signal:
     """Evaluate the *last completed* row of an already-`prepare()`d frame.
+    Thin wrapper over `generate_signal_from_row` -- see that function for
+    the actual logic and for why a hot loop (the backtester) should call it
+    directly instead of slicing a growing DataFrame just to hand it here.
+    """
+    return generate_signal_from_row(
+        enriched_df.iloc[-1], bar_index=len(enriched_df) - 1,
+        sentiment_score=sentiment_score, min_confirmations=min_confirmations,
+        cot_percentile=cot_percentile, cot_extreme_low=cot_extreme_low, cot_extreme_high=cot_extreme_high,
+    )
+
+
+def generate_signal_from_row(
+    row: pd.Series,
+    bar_index: int,
+    sentiment_score: float | None = None,
+    min_confirmations: int = 2,
+    cot_percentile: float | None = None,
+    cot_extreme_low: float = 10.0,
+    cot_extreme_high: float = 90.0,
+) -> Signal:
+    """Same logic as `generate_signal`, operating directly on one row plus
+    its position in the series instead of a DataFrame slice. `bar_index` is
+    the row's 0-based position in the full `prepare()`d frame (so bar_index
+    210 is the 211th bar) -- used only for the "enough history yet" check
+    that `generate_signal` used to get from `len(enriched_df)`.
+
+    Exists so a bar-by-bar loop (the backtester, walk-forward research)
+    doesn't have to materialize `enriched.iloc[:i+1]` -- a full-width copy
+    that grows every iteration -- just to read its last row and its length.
+    `generate_signal` is the DataFrame-based convenience wrapper for every
+    other caller (the live loop polls once a minute; this doesn't matter
+    there).
+
     `min_confirmations` has no implicit global default on purpose -- callers
     (the live loop, the backtester, research code) pass it explicitly from
     whichever RiskConfig they're using, so a research script sweeping this
@@ -67,10 +100,9 @@ def generate_signal(
     to leave it out entirely (e.g. config.enable_cot_filter is off, or no
     point-in-time COT reading exists yet for this bar).
     """
-    if len(enriched_df) < 210:  # need enough bars for EMA-200 etc. to be meaningful
+    if bar_index < 209:  # need 210 bars (indices 0..209) for EMA-200 etc. to be meaningful
         return Signal(Direction.FLAT, 0.0, ["insufficient history for reliable indicators"])
 
-    row = enriched_df.iloc[-1]
     long_votes: list[str] = []
     short_votes: list[str] = []
 

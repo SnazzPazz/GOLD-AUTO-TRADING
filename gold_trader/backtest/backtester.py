@@ -87,15 +87,22 @@ def run_backtest(
         cot_lookup = PointInTimeCotLookup()
 
     enriched = se.prepare(candles)
+    atr_series = enriched["atr_14"]
+    index = enriched.index
+    regime_lookback = risk_config.volatility_regime_lookback
     equity_curve = []
     last_day = None
     regime_rejections = 0
 
+    # Iterates with .iloc[i] / bounded Series slices rather than re-slicing the whole,
+    # ever-growing enriched DataFrame every bar (enriched.iloc[:i+1]) -- that used to copy
+    # all ~20 columns on every one of potentially thousands of iterations, most of whose
+    # rows generate_signal and the regime check never looked at anyway.
     for i in range(warmup_bars, len(enriched)):
-        window = enriched.iloc[: i + 1]
-        row = window.iloc[-1]
+        row = enriched.iloc[i]
+        current_time = index[i]
 
-        bar_day = window.index[-1].date() if hasattr(window.index[-1], "date") else None
+        bar_day = current_time.date() if hasattr(current_time, "date") else None
         if bar_day is not None and bar_day != last_day:
             risk_mgr.start_of_day(broker.get_account_balance())
             last_day = bar_day
@@ -104,26 +111,27 @@ def run_backtest(
 
         equity = broker.get_account_balance()
         risk_mgr.update_equity(equity)
-        equity_curve.append((window.index[-1], equity))
+        equity_curve.append((current_time, equity))
 
         open_positions = 1 if broker.get_open_position() else 0
         can_trade, _ = risk_mgr.can_trade(open_positions)
         if not can_trade or open_positions:
             continue
 
-        regime = gate.check_volatility_regime(window["atr_14"])
+        atr_window = atr_series.iloc[max(0, i + 1 - regime_lookback):i + 1]
+        regime = gate.check_volatility_regime(atr_window)
         if not regime.approved:
             regime_rejections += 1
             continue
 
-        sentiment_score = sentiment_lookup.score_at(window.index[-1].timestamp()) if sentiment_lookup else None
+        sentiment_score = sentiment_lookup.score_at(current_time.timestamp()) if sentiment_lookup else None
         cot_percentile = None
         if cot_lookup is not None and risk_config.enable_cot_filter:
-            cot_reading = cot_lookup.reading_at(window.index[-1])
+            cot_reading = cot_lookup.reading_at(current_time)
             cot_percentile = cot_reading.percentile_in_history if cot_reading else None
 
-        signal = se.generate_signal(
-            window, sentiment_score=sentiment_score, min_confirmations=risk_config.min_confirmations,
+        signal = se.generate_signal_from_row(
+            row, i, sentiment_score=sentiment_score, min_confirmations=risk_config.min_confirmations,
             cot_percentile=cot_percentile,
             cot_extreme_low=risk_config.cot_extreme_low_percentile,
             cot_extreme_high=risk_config.cot_extreme_high_percentile,
