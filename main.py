@@ -2,12 +2,19 @@
 """Gold (XAU/USD) automated trading system — demo/paper-trading only.
 
 Usage:
-    python main.py backtest         [--bars N] [--granularity H1] [--review-interval-days N]
-    python main.py walk-forward     [--bars N] [--granularity H1] [--folds 6]
-    python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3]
-    python main.py stress-test      [--bars N] [--granularity H1] [--paths 50] [--block-size 120]
+    python main.py backtest         [--bars N] [--granularity H1] [--review-interval-days N] [--cache-ttl-seconds N]
+    python main.py walk-forward     [--bars N] [--granularity H1] [--folds 6] [--cache-ttl-seconds N]
+    python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3] [--cache-ttl-seconds N]
+    python main.py stress-test      [--bars N] [--granularity H1] [--paths 50] [--block-size 120] [--cache-ttl-seconds N]
     python main.py demo             [--broker simulated|oanda]
     python main.py status
+
+All four research commands (backtest, walk-forward, rolling-wf, stress-test)
+cache their raw yfinance fetch to data_cache/ for --cache-ttl-seconds (default
+3600s = 1 hour). yfinance's intraday history has a known non-reproducibility
+quirk: fetching the same window minutes apart can return slightly different
+bars. Within the cache window, repeated runs reuse the exact same data instead
+of silently drifting; pass --cache-ttl-seconds 0 to always fetch fresh.
 
 `backtest` replays historical candles bar-by-bar through the exact same
 signal engine, risk manager, and sizing math the demo loop uses, and
@@ -83,9 +90,24 @@ from gold_trader.strategy import signal_engine as se
 logger = setup_logging()
 
 
+def _add_cache_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--cache-ttl-seconds", type=int, default=3600,
+        help="Cache yfinance's raw fetch to data_cache/ for this many seconds so repeated "
+             "runs reuse identical data instead of hitting yfinance's known intraday "
+             "non-reproducibility quirk (repeated fetches minutes apart can return "
+             "slightly different bars). 0 disables caching and always fetches fresh.",
+    )
+
+
+def _research_provider(args: argparse.Namespace) -> YFinanceDataProvider:
+    ttl = args.cache_ttl_seconds if args.cache_ttl_seconds > 0 else None
+    return YFinanceDataProvider(cache_ttl_seconds=ttl)
+
+
 def cmd_backtest(args: argparse.Namespace) -> None:
     logger.info("Fetching historical %s candles for backtest (source: yfinance GC=F)...", args.granularity)
-    provider = YFinanceDataProvider()
+    provider = _research_provider(args)
     candles = provider.get_historical_candles(args.granularity, args.bars)
     logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
 
@@ -126,7 +148,7 @@ WALK_FORWARD_PARAM_GRID = {
 
 def cmd_walk_forward(args: argparse.Namespace) -> None:
     logger.info("Fetching historical %s candles for walk-forward study...", args.granularity)
-    provider = YFinanceDataProvider()
+    provider = _research_provider(args)
     candles = provider.get_historical_candles(args.granularity, args.bars)
     logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
 
@@ -184,7 +206,7 @@ ROLLING_WF_PARAM_GRID = {
 
 def cmd_rolling_wf(args: argparse.Namespace) -> None:
     logger.info("Fetching historical %s candles for rolling walk-forward study...", args.granularity)
-    provider = YFinanceDataProvider()
+    provider = _research_provider(args)
     candles = provider.get_historical_candles(args.granularity, args.bars)
     logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
 
@@ -219,7 +241,7 @@ def cmd_rolling_wf(args: argparse.Namespace) -> None:
 
 def cmd_stress_test(args: argparse.Namespace) -> None:
     logger.info("Fetching historical %s candles for stress test...", args.granularity)
-    provider = YFinanceDataProvider()
+    provider = _research_provider(args)
     candles = provider.get_historical_candles(args.granularity, args.bars)
     logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
 
@@ -494,12 +516,14 @@ def main() -> None:
         help="Simulate a human checking in and clearing a halt every N days (realistic "
              "continuous operation). Omit for the pessimistic 'never touched again' reading.",
     )
+    _add_cache_arg(bt)
     bt.set_defaults(func=cmd_backtest)
 
     wf = sub.add_parser("walk-forward", help="Out-of-sample walk-forward research (see module docstring).")
     wf.add_argument("--bars", type=int, default=5000)
     wf.add_argument("--granularity", default=settings.candle_granularity)
     wf.add_argument("--folds", type=int, default=6)
+    _add_cache_arg(wf)
     wf.set_defaults(func=cmd_walk_forward)
 
     rwf = sub.add_parser("rolling-wf", help="Rolling walk-forward: many independent out-of-sample folds.")
@@ -507,6 +531,7 @@ def main() -> None:
     rwf.add_argument("--granularity", default=settings.candle_granularity)
     rwf.add_argument("--folds", type=int, default=10)
     rwf.add_argument("--min-in-sample", type=int, default=3)
+    _add_cache_arg(rwf)
     rwf.set_defaults(func=cmd_rolling_wf)
 
     st = sub.add_parser("stress-test", help="Stress-test against synthetic adverse paths (see module docstring).")
@@ -515,6 +540,7 @@ def main() -> None:
     st.add_argument("--paths", type=int, default=50)
     st.add_argument("--block-size", type=int, default=120)
     st.add_argument("--review-interval-days", type=int, default=30)
+    _add_cache_arg(st)
     st.set_defaults(func=cmd_stress_test)
 
     demo = sub.add_parser("demo", help="Run the continuous demo/paper-trading loop.")

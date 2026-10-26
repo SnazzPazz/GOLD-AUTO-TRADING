@@ -12,7 +12,9 @@ patterns, strategy, backtester) never has to know which one is in use.
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -57,18 +59,73 @@ class YFinanceDataProvider(MarketDataProvider):
         "D": ("1d", "max"),
     }
 
-    def __init__(self, ticker: str = "GC=F"):
-        self.ticker = ticker
+    def __init__(
+        self,
+        ticker: str = "GC=F",
+        cache_dir: str | Path | None = "data_cache",
+        cache_ttl_seconds: float | None = None,
+    ):
+        """cache_ttl_seconds=None (the default) disables caching entirely: every call
+        hits yfinance fresh. That's what the live demo loop needs when it polls this
+        provider every poll_interval_seconds for current market data -- caching there
+        would mean trading on stale prices.
 
-    def get_historical_candles(self, granularity: str, count: int) -> pd.DataFrame:
+        Research code (backtest/walk-forward/rolling-wf/stress-test in main.py) passes
+        an explicit TTL instead. yfinance's intraday history has a known
+        non-reproducibility quirk: repeated fetches minutes apart return slightly
+        different bars (most likely the most-recent incomplete bar continuing to
+        update), which undermines re-running the same study and expecting the same
+        numbers. Caching the raw fetch to disk for the TTL window makes repeated runs
+        within that window use byte-identical data.
+        """
+        self.ticker = ticker
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.cache_ttl_seconds = cache_ttl_seconds
+
+    def _cache_path(self, interval: str, period: str) -> Path:
+        safe_ticker = self.ticker.replace("/", "_").replace("=", "_")
+        return self.cache_dir / f"{safe_ticker}_{interval}_{period}.csv"
+
+    def _load_cached_raw(self, interval: str, period: str) -> pd.DataFrame | None:
+        if self.cache_dir is None or self.cache_ttl_seconds is None:
+            return None
+        path = self._cache_path(interval, period)
+        if not path.exists():
+            return None
+        age_seconds = time.time() - path.stat().st_mtime
+        if age_seconds >= self.cache_ttl_seconds:
+            return None
+        df = pd.read_csv(path, index_col="time")
+        # Explicit utc=True, not parse_dates=True on read_csv: a mixed-offset
+        # datetime column parsed that way silently stays dtype=object (strings),
+        # not a real DatetimeIndex -- caught once already in ad-hoc scratch scripts.
+        df.index = pd.to_datetime(df.index, utc=True)
+        return df
+
+    def _write_cache(self, interval: str, period: str, df: pd.DataFrame) -> None:
+        if self.cache_dir is None or self.cache_ttl_seconds is None:
+            return
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        df.to_csv(self._cache_path(interval, period))
+
+    def _fetch_raw(self, interval: str, period: str) -> pd.DataFrame:
         import yfinance as yf
 
-        interval, period = self._GRANULARITY_TO_YF.get(granularity, ("15m", "60d"))
         df = yf.Ticker(self.ticker).history(period=period, interval=interval)
         if df.empty:
             raise RuntimeError(f"yfinance returned no data for {self.ticker} ({interval}/{period})")
         df = df.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
         df.index.name = "time"
+        return df
+
+    def get_historical_candles(self, granularity: str, count: int) -> pd.DataFrame:
+        interval, period = self._GRANULARITY_TO_YF.get(granularity, ("15m", "60d"))
+
+        df = self._load_cached_raw(interval, period)
+        if df is None:
+            df = self._fetch_raw(interval, period)
+            self._write_cache(interval, period, df)
+
         if granularity == "H4":
             df = (
                 df.resample("4h")

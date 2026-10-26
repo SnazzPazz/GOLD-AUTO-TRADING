@@ -5,5 +5,7 @@ __pycache__/
 logs/*.log
 logs/*.jsonl
 logs/*.csv
+logs/*.json
 reports/*.csv
+data_cache/
 .venv/
