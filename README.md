@@ -81,6 +81,41 @@ apply directly here, without needing any LLM:
   every signal, rejection, and halt with its reasoning, so "is this
   reliable" can be checked against the record instead of a summary.
 
+## What's been tested and found not to help
+
+Not every idea that sounds legitimate turns out to help, and the honest
+thing to do with a negative result is report it, not hide it or keep
+tuning until it looks positive. Surveyed a batch of other trading
+repositories (freqtrade, vnpy, ccxt, nautilus_trader, backtrader, and
+several LLM-agent trading products) for architecture ideas; nearly all
+were disqualified on structural grounds — crypto/China-market-only with
+no OANDA or forex support, redundant with what was already taken from
+TradingAgents, or an apparently-unmaintained dependency for capabilities
+this project already has, built more rigorously (its own walk-forward
+discipline, for one).
+
+One idea *was* built and tested: **CFTC Commitments-of-Traders (COT) gold
+positioning** (`sentiment/cot_data.py`) — free, public, no API key, no
+login, no scraping of anyone's account. It's the classic contrarian
+heuristic (extreme net-long speculative positioning precedes pullbacks,
+extreme net-short precedes rallies) wired in as an optional confirmation
+vote, point-in-time safe (it accounts for the ~3-day lag between a
+report's "as of" date and when the CFTC actually publishes it, and its
+percentile ranking is computed on an expanding window so it never ranks a
+reading against data from the future).
+
+Run through `walk-forward` on real H1 gold data, turning it on
+(`ENABLE_COT_FILTER=true`) made every matched configuration **worse**, not
+better — lower Sharpe-like ratio in every single pairing in the
+leaderboard. The likely reason: COT reports update weekly, and this
+system makes hourly decisions requiring multiple confirmations agreeing at
+once — a signal that only changes once a week doesn't carry enough
+information to usefully move an hourly vote, whatever the heuristic's
+merit might be elsewhere. It defaults to **off**, and this result is why —
+not caution, but a tested finding. The code stays in the repo (disabled)
+rather than being deleted, so the test is repeatable and the finding
+stays honest rather than disappearing.
+
 ## Why gold, why OANDA
 
 - OANDA's free **practice** account streams the exact same live market
@@ -114,6 +149,8 @@ gold_trader/
                             slippage/staleness (see "What this borrowed...")
   sentiment/history.py    Point-in-time sentiment log + lookup, for backtesting
                            the sentiment path honestly (no retroactive guessing)
+  sentiment/cot_data.py   CFTC gold positioning data, point-in-time safe;
+                           tested and found not to help (off by default)
   decision_log.py         Append-only JSONL record of every live-loop evaluation
   execution/broker.py    SimulatedBroker (local ledger) and
                           OandaPracticeBroker (real demo-account orders)
@@ -225,6 +262,7 @@ why each decision was or wasn't made.
 | `MAX_SLIPPAGE_ATR_MULTIPLE` | 0.5 | Rejects a trade if live price has drifted more than this many stop-distances from the signal price (stale-signal guard) |
 | `VOLATILITY_REGIME_LOOKBACK` | 100 | Bars of ATR history used to judge "normal" volatility |
 | `VOLATILITY_REGIME_LOW/HIGH_PERCENTILE` | 10 / 95 | Rejects trades when current ATR falls outside this percentile band of its own recent history |
+| `ENABLE_COT_FILTER` | false | CFTC gold positioning as an extra confirmation vote — tested, found to hurt results, left off |
 
 These are conservative starting points, not tuned recommendations — adjust
 them deliberately, and re-run the backtester after any change.

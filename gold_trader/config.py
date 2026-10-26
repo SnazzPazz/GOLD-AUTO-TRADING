@@ -75,6 +75,15 @@ class RiskConfig:
     # signal fires. Higher = fewer, more selective trades; lower = more trades, more false positives.
     min_confirmations: int = field(default_factory=lambda: _get_int("MIN_CONFIRMATIONS", 2))
 
+    # --- CFTC Commitments-of-Traders positioning filter (see sentiment/cot_data.py) ---
+    # Off by default: this is a hypothesis (extreme speculative positioning precedes a
+    # reversal) that research/walk_forward.py should confirm actually helps before it's
+    # relied on, not something assumed true just because it's wired in.
+    enable_cot_filter: bool = field(default_factory=lambda: _get_bool("ENABLE_COT_FILTER", False))
+    # Net speculative positioning above/below these trailing percentiles counts as "extreme".
+    cot_extreme_low_percentile: float = field(default_factory=lambda: _get_float("COT_EXTREME_LOW_PERCENTILE", 10.0))
+    cot_extreme_high_percentile: float = field(default_factory=lambda: _get_float("COT_EXTREME_HIGH_PERCENTILE", 90.0))
+
 
 @dataclass
 class Settings:

@@ -42,6 +42,7 @@ from gold_trader.logging_config import setup_logging
 from gold_trader.research.walk_forward import run_walk_forward_study
 from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
+from gold_trader.sentiment.cot_data import PointInTimeCotLookup
 from gold_trader.sentiment.news_feed import NewsSentimentProvider
 from gold_trader.strategy import signal_engine as se
 
@@ -80,6 +81,7 @@ WALK_FORWARD_PARAM_GRID = {
     "min_confirmations": [2, 3],
     "atr_stop_multiple": [1.0, 1.5, 2.0],
     "reward_risk_ratio": [1.0, 1.5, 2.0],
+    "enable_cot_filter": [False, True],
 }
 
 
@@ -147,6 +149,8 @@ def cmd_demo(args: argparse.Namespace) -> None:
         else SimulatedBroker(settings.starting_demo_balance, spread_cost_per_unit=settings.risk.spread_cost_per_unit)
     )
     sentiment_provider = NewsSentimentProvider() if settings.enable_sentiment else None
+    cot_lookup = PointInTimeCotLookup() if settings.risk.enable_cot_filter else None
+    cot_last_refreshed = time.time()
     gate = PortfolioApprovalGate(
         max_slippage_atr_multiple=settings.risk.max_slippage_atr_multiple,
         regime_lookback=settings.risk.volatility_regime_lookback,
@@ -214,8 +218,20 @@ def cmd_demo(args: argparse.Namespace) -> None:
                 continue
 
             sentiment_score = sentiment_provider.get_sentiment().score if sentiment_provider else None
+
+            cot_percentile = None
+            if cot_lookup is not None:
+                if time.time() - cot_last_refreshed > 86_400:  # COT reports update weekly; daily refresh is plenty
+                    cot_lookup = PointInTimeCotLookup()
+                    cot_last_refreshed = time.time()
+                cot_reading = cot_lookup.reading_at(enriched.index[-1])
+                cot_percentile = cot_reading.percentile_in_history if cot_reading else None
+
             signal = se.generate_signal(
                 enriched, sentiment_score=sentiment_score, min_confirmations=settings.risk.min_confirmations,
+                cot_percentile=cot_percentile,
+                cot_extreme_low=settings.risk.cot_extreme_low_percentile,
+                cot_extreme_high=settings.risk.cot_extreme_high_percentile,
             )
 
             if signal.direction is se.Direction.FLAT:

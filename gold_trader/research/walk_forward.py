@@ -27,6 +27,7 @@ import pandas as pd
 
 from gold_trader.backtest.backtester import BacktestReport, run_backtest
 from gold_trader.config import RiskConfig
+from gold_trader.sentiment.cot_data import PointInTimeCotLookup
 
 MIN_TRADES_FOR_RANKING = 10  # a config that fired fewer trades than this in a fold is too noisy to rank on
 
@@ -55,8 +56,11 @@ def split_folds(df: pd.DataFrame, n_folds: int) -> list[pd.DataFrame]:
     return folds
 
 
-def evaluate_fold(df: pd.DataFrame, risk_config: RiskConfig, starting_balance: float, fold_index: int = 0) -> FoldResult:
-    report = run_backtest(df, risk_config, starting_balance=starting_balance, use_recorded_sentiment=False)
+def evaluate_fold(
+    df: pd.DataFrame, risk_config: RiskConfig, starting_balance: float, fold_index: int = 0,
+    cot_lookup: PointInTimeCotLookup | None = None,
+) -> FoldResult:
+    report = run_backtest(df, risk_config, starting_balance=starting_balance, use_recorded_sentiment=False, cot_lookup=cot_lookup)
     start = str(df.index[0]) if len(df) else ""
     end = str(df.index[-1]) if len(df) else ""
     return FoldResult(fold_index, start, end, report)
@@ -87,6 +91,7 @@ def grid_search_in_sample(
     base_config: RiskConfig,
     param_grid: dict[str, list],
     starting_balance: float,
+    cot_lookup: PointInTimeCotLookup | None = None,
 ) -> tuple[RiskConfig, list[dict]]:
     """Evaluates every combination in param_grid across ALL in_sample_folds
     (never the held-out fold) and returns the best-ranked config plus a
@@ -99,8 +104,10 @@ def grid_search_in_sample(
     for values in itertools.product(*param_grid.values()):
         overrides = dict(zip(keys, values))
         candidate = replace(base_config, **overrides)
-        reports = [run_backtest(fold, candidate, starting_balance=starting_balance, use_recorded_sentiment=False)
-                   for fold in in_sample_folds]
+        reports = [
+            run_backtest(fold, candidate, starting_balance=starting_balance, use_recorded_sentiment=False, cot_lookup=cot_lookup)
+            for fold in in_sample_folds
+        ]
         rank_key = _ranking_key(reports)
         leaderboard.append({
             "params": overrides,
@@ -140,17 +147,25 @@ def run_walk_forward_study(
     if n_folds < 2:
         raise ValueError("need at least 2 folds: in-sample selection plus one held-out fold")
 
+    # Fetched at most once per study, no matter how many backtests run below --
+    # the CFTC data itself doesn't change across candidates, only whether a
+    # given candidate's enable_cot_filter flag makes use of it.
+    needs_cot = base_config.enable_cot_filter or True in param_grid.get("enable_cot_filter", [])
+    cot_lookup = PointInTimeCotLookup() if needs_cot else None
+
     folds = split_folds(df, n_folds)
     in_sample_folds, held_out = folds[:-1], folds[-1]
 
     default_results = [
-        evaluate_fold(fold, base_config, starting_balance, i) for i, fold in enumerate(folds)
+        evaluate_fold(fold, base_config, starting_balance, i, cot_lookup=cot_lookup) for i, fold in enumerate(folds)
     ]
 
-    selected_config, leaderboard = grid_search_in_sample(in_sample_folds, base_config, param_grid, starting_balance)
+    selected_config, leaderboard = grid_search_in_sample(
+        in_sample_folds, base_config, param_grid, starting_balance, cot_lookup=cot_lookup,
+    )
 
-    held_out_selected = evaluate_fold(held_out, selected_config, starting_balance, n_folds - 1)
-    held_out_default = evaluate_fold(held_out, base_config, starting_balance, n_folds - 1)
+    held_out_selected = evaluate_fold(held_out, selected_config, starting_balance, n_folds - 1, cot_lookup=cot_lookup)
+    held_out_default = evaluate_fold(held_out, base_config, starting_balance, n_folds - 1, cot_lookup=cot_lookup)
 
     return WalkForwardResult(
         default_config_folds=default_results,

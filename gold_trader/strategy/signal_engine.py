@@ -50,12 +50,22 @@ def generate_signal(
     enriched_df: pd.DataFrame,
     sentiment_score: float | None = None,
     min_confirmations: int = 2,
+    cot_percentile: float | None = None,
+    cot_extreme_low: float = 10.0,
+    cot_extreme_high: float = 90.0,
 ) -> Signal:
     """Evaluate the *last completed* row of an already-`prepare()`d frame.
     `min_confirmations` has no implicit global default on purpose -- callers
     (the live loop, the backtester, research code) pass it explicitly from
     whichever RiskConfig they're using, so a research script sweeping this
     value can never accidentally fall back to a value it didn't ask for.
+
+    `cot_percentile`, when provided, is a full confirmation vote (not just a
+    dampener like sentiment): extreme net-short speculative gold positioning
+    (<= cot_extreme_low) votes long, extreme net-long (>= cot_extreme_high)
+    votes short -- the classic contrarian positioning heuristic. Pass None
+    to leave it out entirely (e.g. config.enable_cot_filter is off, or no
+    point-in-time COT reading exists yet for this bar).
     """
     if len(enriched_df) < 210:  # need enough bars for EMA-200 etc. to be meaningful
         return Signal(Direction.FLAT, 0.0, ["insufficient history for reliable indicators"])
@@ -90,6 +100,13 @@ def generate_signal(
     if row["close"] >= row["bb_upper"]:
         short_votes.append("price at/above upper Bollinger band")
 
+    # 5. COT positioning extreme (contrarian), only when explicitly supplied.
+    if cot_percentile is not None:
+        if cot_percentile <= cot_extreme_low:
+            long_votes.append(f"COT: extreme net-short speculative positioning ({cot_percentile:.0f}th pctl)")
+        elif cot_percentile >= cot_extreme_high:
+            short_votes.append(f"COT: extreme net-long speculative positioning ({cot_percentile:.0f}th pctl)")
+
     long_count, short_count = len(long_votes), len(short_votes)
 
     if long_count >= min_confirmations and long_count > short_count:
@@ -103,7 +120,8 @@ def generate_signal(
             price=row["close"], atr=row["atr_14"],
         )
 
-    confidence = min(confirmations / 4.0, 1.0)
+    max_possible_confirmations = 5 if cot_percentile is not None else 4
+    confidence = min(confirmations / max_possible_confirmations, 1.0)
 
     # Sentiment can only veto/dampen, never originate, and only if enabled.
     if sentiment_score is not None:

@@ -20,6 +20,7 @@ from gold_trader.config import RiskConfig
 from gold_trader.execution.broker import SimulatedBroker
 from gold_trader.risk.approval_gate import PortfolioApprovalGate
 from gold_trader.risk.risk_manager import RiskManager
+from gold_trader.sentiment.cot_data import PointInTimeCotLookup
 from gold_trader.sentiment.history import PointInTimeSentimentLookup
 from gold_trader.strategy import signal_engine as se
 
@@ -58,12 +59,19 @@ def run_backtest(
     starting_balance: float = 10_000.0,
     warmup_bars: int = 210,
     use_recorded_sentiment: bool = True,
+    cot_lookup: PointInTimeCotLookup | None = None,
 ) -> BacktestReport:
     """`use_recorded_sentiment=True` replays point-in-time sentiment recorded
     by the live demo loop (see sentiment/history.py) wherever it exists for
     this period; bars before any recording started simply get no sentiment
     input, same as if sentiment were disabled -- there is no way to
     backdate it honestly, so this never guesses.
+
+    `cot_lookup`: pass a pre-fetched `PointInTimeCotLookup` when calling this
+    many times (e.g. from walk-forward research) so the CFTC API is hit once,
+    not once per call. If `risk_config.enable_cot_filter` is True and no
+    lookup is supplied, one is fetched here for convenience on a single
+    standalone backtest run.
     """
     broker = SimulatedBroker(starting_balance, spread_cost_per_unit=risk_config.spread_cost_per_unit)
     risk_mgr = RiskManager(risk_config)
@@ -75,6 +83,8 @@ def run_backtest(
         regime_high_percentile=risk_config.volatility_regime_high_percentile,
     )
     sentiment_lookup = PointInTimeSentimentLookup() if use_recorded_sentiment else None
+    if risk_config.enable_cot_filter and cot_lookup is None:
+        cot_lookup = PointInTimeCotLookup()
 
     enriched = se.prepare(candles)
     equity_curve = []
@@ -107,7 +117,17 @@ def run_backtest(
             continue
 
         sentiment_score = sentiment_lookup.score_at(window.index[-1].timestamp()) if sentiment_lookup else None
-        signal = se.generate_signal(window, sentiment_score=sentiment_score, min_confirmations=risk_config.min_confirmations)
+        cot_percentile = None
+        if cot_lookup is not None and risk_config.enable_cot_filter:
+            cot_reading = cot_lookup.reading_at(window.index[-1])
+            cot_percentile = cot_reading.percentile_in_history if cot_reading else None
+
+        signal = se.generate_signal(
+            window, sentiment_score=sentiment_score, min_confirmations=risk_config.min_confirmations,
+            cot_percentile=cot_percentile,
+            cot_extreme_low=risk_config.cot_extreme_low_percentile,
+            cot_extreme_high=risk_config.cot_extreme_high_percentile,
+        )
         if signal.direction is se.Direction.FLAT:
             continue
 
