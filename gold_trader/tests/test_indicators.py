@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from gold_trader.analysis import indicators as ind
 
@@ -16,6 +17,19 @@ def test_rsi_flat_price_is_neutral():
     df = _flat_df()
     rsi = ind.rsi(df["close"])
     assert np.isclose(rsi.iloc[-1], 50.0, atol=5)
+
+
+def test_rsi_pure_uptrend_reads_maximally_overbought_not_neutral():
+    """A strictly increasing series has zero down-ticks, so avg_loss hits
+    exactly 0 -- that must read as 100 (maximally overbought), not fall
+    through to the flat-series default of 50."""
+    series = pd.Series(np.linspace(100, 200, 300))
+    assert ind.rsi(series, 14).iloc[-1] == pytest.approx(100.0)
+
+
+def test_rsi_pure_downtrend_reads_maximally_oversold():
+    series = pd.Series(np.linspace(200, 100, 300))
+    assert ind.rsi(series, 14).iloc[-1] == pytest.approx(0.0)
 
 
 def test_rsi_bounds():

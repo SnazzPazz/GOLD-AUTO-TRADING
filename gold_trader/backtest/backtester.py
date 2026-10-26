@@ -102,7 +102,6 @@ def run_backtest(
     index = enriched.index
     regime_lookback = risk_config.volatility_regime_lookback
     equity_curve = []
-    last_day = None
     last_review_day = None
     regime_rejections = 0
     reviews_performed = 0
@@ -115,19 +114,16 @@ def run_backtest(
         row = enriched.iloc[i]
         current_time = index[i]
 
-        bar_day = current_time.date() if hasattr(current_time, "date") else None
-        if bar_day is not None and bar_day != last_day:
-            risk_mgr.start_of_day(broker.get_account_balance())
-            last_day = bar_day
-
-            if review_interval_days is not None:
-                if last_review_day is None:
-                    last_review_day = bar_day
-                elif (bar_day - last_review_day).days >= review_interval_days:
-                    if risk_mgr.halted_permanently:
-                        risk_mgr.review_and_reset(broker.get_account_balance())
-                        reviews_performed += 1
-                    last_review_day = bar_day
+        is_new_day = risk_mgr.roll_day_if_needed(current_time, broker.get_account_balance())
+        if is_new_day and review_interval_days is not None:
+            bar_day = current_time.date()
+            if last_review_day is None:
+                last_review_day = bar_day
+            elif (bar_day - last_review_day).days >= review_interval_days:
+                if risk_mgr.halted_permanently:
+                    risk_mgr.review_and_reset(broker.get_account_balance())
+                    reviews_performed += 1
+                last_review_day = bar_day
 
         broker.check_stops_bar(row["high"], row["low"])
 

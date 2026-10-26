@@ -27,6 +27,12 @@ def rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
     out = 100 - (100 / (1 + rs))
+    # avg_loss == 0 makes rs NaN (division by the NaN we substituted for zero), so a
+    # sustained one-directional move with literally zero down-ticks -- a real
+    # possibility over 14 bars, not just a synthetic edge case -- fell through to the
+    # blanket fillna(50.0) below and reported "neutral" for what should read as
+    # maximally overbought (100). Only the genuinely flat case (no gain either) is 50.
+    out = out.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
     return out.fillna(50.0)
 
 

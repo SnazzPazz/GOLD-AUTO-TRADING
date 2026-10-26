@@ -18,9 +18,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-import requests
-
 from gold_trader.config import Settings
+from gold_trader.data.providers import build_oanda_session
 from gold_trader.risk.risk_manager import TradePlan
 from gold_trader.strategy.signal_engine import Direction
 
@@ -149,11 +148,7 @@ class OandaPracticeBroker(BrokerExecution):
         self.host = settings.oanda_host
         self.account_id = settings.oanda_account_id
         self.instrument = settings.instrument
-        self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {settings.oanda_api_key}",
-            "Content-Type": "application/json",
-        })
+        self._session = build_oanda_session(settings)
 
     def get_account_balance(self) -> float:
         resp = self._session.get(f"{self.host}/v3/accounts/{self.account_id}/summary", timeout=10)
@@ -173,7 +168,11 @@ class OandaPracticeBroker(BrokerExecution):
         if long_units == 0 and short_units == 0:
             return None
         units = long_units if long_units != 0 else short_units
-        avg_price = float(data["long"]["averagePrice"] or data["short"]["averagePrice"])
+        # Not `data["long"]["averagePrice"] or data["short"][...]`: OANDA returns
+        # averagePrice as a non-empty string ("0.0") for the flat side, and any
+        # non-empty string is truthy in Python -- that `or` always picked "long"'s
+        # value, silently returning 0.0 as the entry price for every short-only position.
+        avg_price = float(data["long"]["averagePrice"]) if long_units != 0 else float(data["short"]["averagePrice"])
         return Position(units=units, entry_price=avg_price, stop_loss=0.0, take_profit=0.0)
 
     def open_position(self, plan: TradePlan) -> None:

@@ -51,6 +51,22 @@ def test_size_trade_respects_leverage_cap():
     assert plan.units * plan.entry_price <= 10_000 * 2.0 + 1e-6
 
 
+def test_size_trade_risk_amount_reflects_leverage_capped_units_not_requested_pct():
+    """risk_amount must describe the dollar risk of the position actually
+    sized (after the leverage cap shrinks units), not the larger pre-cap
+    figure implied by risk_per_trade_pct alone -- a log line saying
+    'risking $500' for a trade whose real stop-to-entry exposure is $15
+    would be actively misleading about capital at risk."""
+    rm = make_risk_manager(max_leverage=2.0, risk_per_trade_pct=0.05)
+    signal = Signal(Direction.LONG, confidence=0.9, price=2000.0, atr=1.0)
+    plan = rm.size_trade(signal, account_balance=10_000)
+
+    stop_distance = 1.5 * signal.atr  # atr_stop_multiple=1.5 from make_risk_manager
+    assert plan.risk_amount == pytest.approx(plan.units * stop_distance)
+    assert plan.risk_amount == pytest.approx(15.0)  # 10 units * 1.5 stop distance
+    assert plan.risk_amount != pytest.approx(10_000 * 0.05)  # not the uncapped $500
+
+
 def test_daily_loss_circuit_breaker_halts_trading():
     rm = make_risk_manager(max_daily_loss_pct=0.03)
     rm.start_of_day(10_000)

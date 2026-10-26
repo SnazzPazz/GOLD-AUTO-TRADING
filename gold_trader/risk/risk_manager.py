@@ -32,11 +32,29 @@ class RiskManager:
         self.halted_permanently = False
         self.halt_reason: str | None = None
         self.trades_today = 0
+        self._last_day = None
 
     def start_of_day(self, balance: float) -> None:
         self.day_start_balance = balance
         self.halted_for_day = False
         self.trades_today = 0
+
+    def roll_day_if_needed(self, timestamp, balance: float) -> bool:
+        """Calls start_of_day() exactly once per calendar day, the first
+        time this is called for that day. The backtester and the live demo
+        loop both need this same "is this a new day" check on every bar/poll;
+        centralizing it here means they can't drift apart on how a day
+        boundary is detected (e.g. one using midnight UTC, the other some
+        other rule) by each reimplementing it separately. Returns True the
+        one time a new day was actually detected, so a caller that needs to
+        piggyback other once-per-day logic (e.g. a periodic review check)
+        knows when that happened."""
+        bar_day = timestamp.date() if hasattr(timestamp, "date") else None
+        if bar_day is not None and bar_day != self._last_day:
+            self.start_of_day(balance)
+            self._last_day = bar_day
+            return True
+        return False
 
     def record_trade_opened(self) -> None:
         self.trades_today += 1
@@ -108,6 +126,12 @@ class RiskManager:
         units = int(units)
         if units <= 0:
             return None
+
+        # Recomputed from the final (possibly leverage-capped, possibly truncated by
+        # int()) unit count -- using the pre-cap risk_amount from above would report a
+        # dollar-risk figure that no longer matches the position actually being sized
+        # whenever the leverage cap or the int() truncation changed `units`.
+        risk_amount = units * stop_distance
 
         if signal.direction is Direction.LONG:
             stop_loss = signal.price - stop_distance

@@ -20,6 +20,20 @@ import requests
 from gold_trader.config import Settings
 
 
+def build_oanda_session(settings: Settings) -> requests.Session:
+    """Shared by OandaDataProvider and execution.broker.OandaPracticeBroker --
+    both talk to the same OANDA account with the same auth, so the session
+    setup lives in exactly one place rather than two copies that could
+    silently drift apart (e.g. if auth handling ever needs a retry policy
+    or an extra header)."""
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {settings.oanda_api_key}",
+        "Content-Type": "application/json",
+    })
+    return session
+
+
 class MarketDataProvider(ABC):
     @abstractmethod
     def get_historical_candles(self, granularity: str, count: int) -> pd.DataFrame:
@@ -86,11 +100,7 @@ class OandaDataProvider(MarketDataProvider):
         self.settings = settings
         self.host = settings.oanda_host
         self.instrument = settings.instrument
-        self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {settings.oanda_api_key}",
-            "Content-Type": "application/json",
-        })
+        self._session = build_oanda_session(settings)
 
     def get_historical_candles(self, granularity: str, count: int) -> pd.DataFrame:
         url = f"{self.host}/v3/instruments/{self.instrument}/candles"

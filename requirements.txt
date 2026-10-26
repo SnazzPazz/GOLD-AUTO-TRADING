@@ -5,5 +5,4 @@ yfinance
 vaderSentiment
 feedparser
 python-dotenv
-pydantic
 pytest

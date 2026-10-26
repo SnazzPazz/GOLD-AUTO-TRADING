@@ -229,17 +229,13 @@ def cmd_demo(args: argparse.Namespace) -> None:
     )
     logger.info("This is demo/paper trading only. No live orders will ever be placed by this CLI.")
 
-    last_day = None
     try:
         while True:
             candles = data_provider.get_historical_candles(settings.candle_granularity, 400)
             enriched = se.prepare(candles)
             latest_price = data_provider.get_latest_price()
 
-            bar_day = enriched.index[-1].date() if hasattr(enriched.index[-1], "date") else None
-            if bar_day is not None and bar_day != last_day:
-                risk_mgr.start_of_day(broker.get_account_balance())
-                last_day = bar_day
+            risk_mgr.roll_day_if_needed(enriched.index[-1], broker.get_account_balance())
 
             closed = broker.check_stops_bar(latest_price, latest_price)
             if closed:
