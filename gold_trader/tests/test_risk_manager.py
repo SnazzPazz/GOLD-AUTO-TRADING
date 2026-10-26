@@ -73,6 +73,34 @@ def test_max_drawdown_circuit_breaker_halts_permanently():
     assert can_trade_after_recovery is False
 
 
+def test_review_and_reset_clears_permanent_halt():
+    rm = make_risk_manager(max_drawdown_pct=0.10)
+    rm.update_equity(10_000)
+    rm.update_equity(8_900)  # halts permanently
+    assert rm.halted_permanently is True
+
+    rm.review_and_reset(current_equity=8_900)
+    assert rm.halted_permanently is False
+    can_trade, _ = rm.can_trade(open_position_count=0)
+    assert can_trade is True
+
+
+def test_review_and_reset_moves_drawdown_baseline_to_current_equity():
+    """The reviewed equity becomes the new peak -- a further drop of the
+    same size from here must be able to halt it again, not be measured
+    against the stale pre-halt peak."""
+    rm = make_risk_manager(max_drawdown_pct=0.10)
+    rm.update_equity(10_000)
+    rm.update_equity(8_900)  # halts, old peak was 10,000
+    rm.review_and_reset(current_equity=8_900)
+
+    rm.update_equity(8_200)  # down ~7.9% from the new 8,900 baseline -- not enough to re-halt
+    assert rm.halted_permanently is False
+
+    rm.update_equity(8_000)  # down ~10.1% from the new 8,900 baseline -- should re-halt
+    assert rm.halted_permanently is True
+
+
 def test_max_concurrent_positions_blocks_new_trade():
     rm = make_risk_manager(max_concurrent_positions=1)
     can_trade, reason = rm.can_trade(open_position_count=1)

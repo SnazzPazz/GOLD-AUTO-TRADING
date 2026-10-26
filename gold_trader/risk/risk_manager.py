@@ -41,6 +41,19 @@ class RiskManager:
     def record_trade_opened(self) -> None:
         self.trades_today += 1
 
+    def review_and_reset(self, current_equity: float) -> None:
+        """A human reviewed a permanent halt and decided to resume trading --
+        this is the only way `halted_permanently` ever clears, deliberately
+        (see module docstring: the breaker exists to force that review, not
+        to be worked around). The loss that triggered the halt is real and
+        stays on the books; what resets is the drawdown baseline, now
+        measured from this point forward rather than against the old peak
+        that caused the halt. A further drop of the same magnitude from
+        here will trigger it again."""
+        self.halted_permanently = False
+        self.peak_equity = current_equity
+        self.halt_reason = None
+
     def update_equity(self, equity: float) -> None:
         if self.peak_equity is None or equity > self.peak_equity:
             self.peak_equity = equity

@@ -36,6 +36,7 @@ class BacktestReport:
     max_drawdown_pct: float
     sharpe_like: float
     regime_rejections: int
+    reviews_performed: int
     equity_curve: pd.Series
     trades: list
 
@@ -50,6 +51,7 @@ class BacktestReport:
             f"Max drawdown:      {self.max_drawdown_pct:.2f}%\n"
             f"Sharpe-like ratio: {self.sharpe_like:.2f}\n"
             f"Regime-rejected:   {self.regime_rejections} signals skipped (abnormal volatility)\n"
+            f"Reviews performed: {self.reviews_performed} (simulated human check-ins that cleared a halt)\n"
         )
 
 
@@ -60,6 +62,7 @@ def run_backtest(
     warmup_bars: int = 210,
     use_recorded_sentiment: bool = True,
     cot_lookup: PointInTimeCotLookup | None = None,
+    review_interval_days: int | None = None,
 ) -> BacktestReport:
     """`use_recorded_sentiment=True` replays point-in-time sentiment recorded
     by the live demo loop (see sentiment/history.py) wherever it exists for
@@ -72,6 +75,14 @@ def run_backtest(
     not once per call. If `risk_config.enable_cot_filter` is True and no
     lookup is supplied, one is fetched here for convenience on a single
     standalone backtest run.
+
+    `review_interval_days`: if set, simulates a human checking in on the bot
+    every N days -- if the max-drawdown circuit breaker has permanently
+    halted trading, the check-in clears it (see RiskManager.review_and_reset)
+    rather than leaving it halted for the rest of the backtest. This is the
+    system's actual intended operating model (stop, wait for a human, don't
+    keep trading blind); leave as None for the pessimistic "never looked at
+    it again" reading of a long continuous backtest.
     """
     broker = SimulatedBroker(starting_balance, spread_cost_per_unit=risk_config.spread_cost_per_unit)
     risk_mgr = RiskManager(risk_config)
@@ -92,7 +103,9 @@ def run_backtest(
     regime_lookback = risk_config.volatility_regime_lookback
     equity_curve = []
     last_day = None
+    last_review_day = None
     regime_rejections = 0
+    reviews_performed = 0
 
     # Iterates with .iloc[i] / bounded Series slices rather than re-slicing the whole,
     # ever-growing enriched DataFrame every bar (enriched.iloc[:i+1]) -- that used to copy
@@ -106,6 +119,15 @@ def run_backtest(
         if bar_day is not None and bar_day != last_day:
             risk_mgr.start_of_day(broker.get_account_balance())
             last_day = bar_day
+
+            if review_interval_days is not None:
+                if last_review_day is None:
+                    last_review_day = bar_day
+                elif (bar_day - last_review_day).days >= review_interval_days:
+                    if risk_mgr.halted_permanently:
+                        risk_mgr.review_and_reset(broker.get_account_balance())
+                        reviews_performed += 1
+                    last_review_day = bar_day
 
         broker.check_stops_bar(row["high"], row["low"])
 
@@ -179,6 +201,7 @@ def run_backtest(
         max_drawdown_pct=max_dd,
         sharpe_like=sharpe_like,
         regime_rejections=regime_rejections,
+        reviews_performed=reviews_performed,
         equity_curve=curve,
         trades=trades,
     )

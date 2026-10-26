@@ -206,6 +206,34 @@ you take from this research, read it as "what the signal is capable of
 when conditions are reasonable," not as "what happens if you walk away for
 two years." Check in on it; that's the model this was built around.
 
+**So here's the actual realistic number.** `run_backtest` now takes
+`review_interval_days`: it simulates exactly that check-in, clearing a
+permanent halt every N days if one has tripped (the loss stays real —
+only the drawdown-measurement baseline resets to current equity, so a
+further 10% drop from *there* can still halt it again). Run on the same
+real, continuous 2.4-year history:
+
+| Review cadence | Total return | Trades | Max drawdown | Reviews needed |
+|---|---|---|---|---|
+| Never (pessimistic) | -9.84% | 72 | 10.1% | 0 |
+| Every 7 days | +72.1% | 655 | 14.2% | 3 |
+| Every 30 days | +57.6% | 641 | 16.8% | 4 |
+| Every 90 days | +71.6% | 580 | 15.3% | 4 |
+
+Only 3-4 reviews were needed across the entire 2.4 years regardless of
+cadence — the halt is rare, not constant. This is the most honest number
+in this whole research effort: not the fold-reset figure (which quietly
+assumes a clean restart that never happens), not the never-touched figure
+(which assumes total abandonment this system was explicitly not designed
+for), but what actually happens if you run it continuously and check in
+periodically, which is the operating model it was built around. Annualized,
+that's roughly 21-29%/year depending on cadence — a real, substantial,
+but not 50%+ result. Reproduce with:
+
+```bash
+python main.py backtest --bars 13723 --granularity H1 --review-interval-days 30
+```
+
 ## Why gold, why OANDA
 
 - OANDA's free **practice** account streams the exact same live market

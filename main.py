@@ -2,7 +2,7 @@
 """Gold (XAU/USD) automated trading system — demo/paper-trading only.
 
 Usage:
-    python main.py backtest         [--bars N] [--granularity H1]
+    python main.py backtest         [--bars N] [--granularity H1] [--review-interval-days N]
     python main.py walk-forward     [--bars N] [--granularity H1] [--folds 6]
     python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3]
     python main.py demo             [--broker simulated|oanda]
@@ -10,7 +10,12 @@ Usage:
 `backtest` replays historical candles bar-by-bar through the exact same
 signal engine, risk manager, and sizing math the demo loop uses, and
 prints a performance report. Run this first and look hard at the numbers
-before trusting anything else here.
+before trusting anything else here. A large --bars value with no
+--review-interval-days gives the pessimistic "walked away and never
+looked at it again" reading (the max-drawdown halt, once triggered, never
+clears); passing --review-interval-days simulates a human checking in
+every N days and clearing a halt if it's tripped -- closer to how this
+system is actually meant to be run.
 
 `walk-forward` is a single in-sample/held-out split: it splits history
 into folds, grid-searches a few config knobs on all but the last fold,
@@ -62,7 +67,10 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     candles = provider.get_historical_candles(args.granularity, args.bars)
     logger.info("Loaded %d candles (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
 
-    report = run_backtest(candles, settings.risk, starting_balance=settings.starting_demo_balance)
+    report = run_backtest(
+        candles, settings.risk, starting_balance=settings.starting_demo_balance,
+        review_interval_days=args.review_interval_days,
+    )
     logger.info("Backtest complete.\n%s", report.summary())
 
     report_path = "reports/latest_backtest.csv"
@@ -340,6 +348,11 @@ def main() -> None:
     bt = sub.add_parser("backtest", help="Replay historical candles and report performance.")
     bt.add_argument("--bars", type=int, default=2000)
     bt.add_argument("--granularity", default=settings.candle_granularity)
+    bt.add_argument(
+        "--review-interval-days", type=int, default=None,
+        help="Simulate a human checking in and clearing a halt every N days (realistic "
+             "continuous operation). Omit for the pessimistic 'never touched again' reading.",
+    )
     bt.set_defaults(func=cmd_backtest)
 
     wf = sub.add_parser("walk-forward", help="Out-of-sample walk-forward research (see module docstring).")

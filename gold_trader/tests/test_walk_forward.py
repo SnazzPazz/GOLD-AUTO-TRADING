@@ -30,7 +30,7 @@ def _dummy_report(num_trades, sharpe, pf, total_return=0.0):
     return BacktestReport(
         starting_balance=10_000, ending_balance=10_000 * (1 + total_return / 100),
         total_return_pct=total_return, num_trades=num_trades, win_rate=0.5, profit_factor=pf,
-        max_drawdown_pct=1.0, sharpe_like=sharpe, regime_rejections=0,
+        max_drawdown_pct=1.0, sharpe_like=sharpe, regime_rejections=0, reviews_performed=0,
         equity_curve=pd.Series([10_000]), trades=[],
     )
 
