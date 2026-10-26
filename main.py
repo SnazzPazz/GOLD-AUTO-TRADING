@@ -5,7 +5,7 @@ Usage:
     python main.py backtest         [--bars N] [--granularity H1] [--review-interval-days N] [--cache-ttl-seconds N]
     python main.py walk-forward     [--bars N] [--granularity H1] [--folds 6] [--cache-ttl-seconds N]
     python main.py rolling-wf       [--bars N] [--granularity H1] [--folds 10] [--min-in-sample 3] [--cache-ttl-seconds N]
-    python main.py stress-test      [--bars N] [--granularity H1] [--paths 50] [--block-size 120] [--cache-ttl-seconds N]
+    python main.py stress-test      [--bars N] [--granularity H1] [--paths 100] [--block-size 120] [--cache-ttl-seconds N]
     python main.py demo             [--broker simulated|oanda]
     python main.py status
 
@@ -537,7 +537,12 @@ def main() -> None:
     st = sub.add_parser("stress-test", help="Stress-test against synthetic adverse paths (see module docstring).")
     st.add_argument("--bars", type=int, default=13000)
     st.add_argument("--granularity", default=settings.candle_granularity)
-    st.add_argument("--paths", type=int, default=50)
+    # 100, not the 50 this originally shipped with: re-running the
+    # CUMULATIVE_DRAWDOWN_HALT_PCT sweep at 100 paths found the worst-case/tail
+    # statistics (what this tool exists to inform) were already stable at 50, but
+    # the mean/median return estimates were noticeably noisier -- a free (if slower)
+    # tightening of the numbers this tool reports, not a correction of a wrong one.
+    st.add_argument("--paths", type=int, default=100)
     st.add_argument("--block-size", type=int, default=120)
     st.add_argument("--review-interval-days", type=int, default=30)
     _add_cache_arg(st)

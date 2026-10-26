@@ -58,6 +58,12 @@ class RiskConfig:
     # across repeated review cycles (three successive 10%-then-reviewed hits compound to
     # ~27% cumulative, not 10%); this stops that compounding at a hard line instead of
     # relying on the real historical path having gotten lucky with how few cycles it needed.
+    # 25% itself was later swept against 15/20/25/30/35% candidates (100 stress-test paths
+    # each, see README "Stress-testing the stress-test's own fix"): the halt caps worst-case
+    # drawdown within ~1pt of whatever it's set to at every value tested, and every looser
+    # value trades a worse worst-case for better average/median returns with no value
+    # dominating on both -- so 25% is a deliberate middle-of-the-range choice, not a winner
+    # picked by the same survivorship-bias mistake this whole mechanism exists to avoid.
     cumulative_drawdown_halt_pct: float = field(default_factory=lambda: _get_float("CUMULATIVE_DRAWDOWN_HALT_PCT", 0.25))
     # Gold-only system: at most this many concurrent open positions (1 = no pyramiding).
     max_concurrent_positions: int = field(default_factory=lambda: _get_int("MAX_CONCURRENT_POSITIONS", 1))

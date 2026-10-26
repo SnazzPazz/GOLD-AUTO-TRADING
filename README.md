@@ -256,7 +256,7 @@ no-edge random walk) for conditions the real 2024–2026 bull run never
 gave us a chance to observe at all.
 
 ```bash
-python main.py stress-test --bars 13723 --granularity H1 --paths 50
+python main.py stress-test --bars 13723 --granularity H1 --paths 100
 ```
 
 Running 50 bootstrap paths against the (then-current) defaults found
@@ -290,6 +290,49 @@ The three shock scenarios all stayed well-controlled even before this fix
 (5-7% worst-case drawdown, zero reviews needed) — this gap was specific
 to reshuffled real-history sequences compounding bad luck across multiple
 review cycles, not a general failure of the risk management.
+
+**Stress-testing the stress-test's own fix.** `CUMULATIVE_DRAWDOWN_HALT_PCT`
+itself had never been stress-tested — it was added *because of* a stress
+test, but shipped at 25% without asking whether 25% was actually the
+right value or just a round number. Re-ran the sweep at 100 bootstrap
+paths (up from 50, see below) against five candidate ceilings:
+
+| Ceiling | Mean return | Median return | Worst-case return | Mean worst-case DD | Max worst-case DD |
+|---|---|---|---|---|---|
+| 15% | +11.8% | -1.2% | -15.7% | 15.1% | 15.8% |
+| 20% | +16.7% | +4.6% | -20.4% | 18.5% | 20.8% |
+| **25% (shipped)** | +17.2% | +6.3% | **-25.7%** | 20.9% | **25.7%** |
+| 30% | +18.2% | +9.9% | -29.2% | 22.3% | 30.6% |
+| 35% | +19.1% | +9.9% | -34.0% | 23.1% | 35.4% |
+
+Two things worth separating here. First, the mechanism works as designed
+at every tested value: max worst-case drawdown lands within ~1 point of
+the configured ceiling at all five (15.8%≈15%, 20.8%≈20%, ..., 35.4%≈35%)
+— this isn't a fluke specific to 25%, the halt reliably caps cumulative
+loss right where it's told to across the whole range. Second, there is no
+free win here: every looser ceiling shows a better mean *and* median
+return, and a worse worst-case return and worst-case drawdown, with no
+value dominating on both axes. Picking the ceiling that shows the best
+average here would be exactly the survivorship-bias mistake this whole
+section exists to avoid (see the loosening-MAX_DRAWDOWN_PCT example
+above) — so the shipped 25% stays as a deliberate middle-of-the-range
+risk-tolerance choice, not because it "won" a comparison. Tightening it
+(e.g. to 15-20%) trades meaningful upside for a lower worst-case; loosening
+it trades a worse worst-case for more upside. Revisit this table if your
+own risk tolerance differs from the shipped default's.
+
+**On sample size.** The 100-path numbers above and the original 50-path
+numbers reported earlier in this section both used `seed=0` at the
+shipped 25% ceiling, so they're directly comparable: worst-case drawdown
+(25.7% vs. 25.7%) and worst-case return (-25.7% vs. -25.6%) barely moved
+between 50 and 100 paths — the tail statistics this tool exists to
+inform were already stable at the smaller sample. Mean return moved more
+(+13.6% at 50 paths vs. +17.2% at 100), i.e. the central-tendency numbers
+are noisier and benefit more from a larger sample than the worst-case
+ones do. `--paths` now defaults to 100 (was 50) on the strength of that
+finding — tightening a reported number, not correcting a wrong
+risk-management conclusion, since the conclusion that mattered (where the
+worst case lands) didn't move.
 
 ## Why gold, why OANDA
 
