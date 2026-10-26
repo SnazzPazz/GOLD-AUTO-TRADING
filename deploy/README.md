@@ -70,12 +70,6 @@ path, the same one a normal Ctrl-C to `main.py demo` itself takes).
   `cumulative_drawdown_halt_pct` trips, the process keeps running (it's not
   crashing) but stops opening new trades, by design -- restarting it doesn't
   bypass that review requirement, and nothing here tries to.
-- **Does not rotate `logs/decision_log.jsonl`.** `logs/gold_trader.log`
-  already rotates (see `gold_trader/logging_config.py`), but the decision
-  log is a plain append-only JSONL file. At one line per poll cycle it grows
-  slowly (roughly 1-2 MB/month at a 60s poll interval), but over a very long
-  unattended run it's worth checking on occasionally rather than assumed
-  bounded.
 - **Does not touch OANDA credentials, live trading, or anything requiring
   you to be at the machine.** Both options run the exact same demo-only
   `main.py demo` command you'd otherwise type yourself.

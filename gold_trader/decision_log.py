@@ -17,10 +17,53 @@ apart and every decision is worth being able to look back at.
 from __future__ import annotations
 
 import json
+import logging
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "decision_log.jsonl"
+
+# One line per poll cycle, indefinitely, with no rotation would grow unbounded over a
+# long unattended run (see deploy/README.md). Reusing RotatingFileHandler rather than
+# hand-rolling rotation: at a typical ~250-byte line and a 60s poll interval, 10MB is
+# roughly a month of history per file; 10 backups is roughly a year of total retention.
+_MAX_BYTES = 10_000_000
+_BACKUP_COUNT = 10
+
+_logger = logging.getLogger("gold_trader.decision_log")
+_logger.setLevel(logging.INFO)
+_logger.propagate = False
+
+# Tracked separately from _logger.handlers rather than read back off it: test runners
+# (pytest's log-capture plugin, in particular) attach their own extra handlers to named
+# loggers for the duration of a test, so "handlers[0]" is not reliably ours to inspect.
+# Keeping our own reference means we only ever touch the one handler we added.
+_active_handler: RotatingFileHandler | None = None
+_active_path: str | None = None
+
+
+def _get_logger() -> logging.Logger:
+    """(Re)points the module logger's handler at the current LOG_PATH.
+
+    Indirection (instead of wiring the handler up once at import time)
+    exists so tests can monkeypatch LOG_PATH to a temp file and get a
+    handler that actually writes there, rather than whichever path was in
+    effect when this module first got imported -- and so importing this
+    module has no filesystem side effect until something actually logs.
+    """
+    global _active_handler, _active_path
+    target = str(LOG_PATH)
+    if _active_path != target:
+        if _active_handler is not None:
+            _logger.removeHandler(_active_handler)
+            _active_handler.close()
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _active_handler = RotatingFileHandler(LOG_PATH, maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT)
+        _active_handler.setFormatter(logging.Formatter("%(message)s"))  # raw JSON line, no preamble
+        _logger.addHandler(_active_handler)
+        _active_path = target
+    return _logger
 
 
 def record_decision(
@@ -34,7 +77,6 @@ def record_decision(
     rejection_reason: str | None,
     action: str,  # "flat" | "opened" | "rejected" | "halted"
 ) -> None:
-    LOG_PATH.parent.mkdir(exist_ok=True)
     entry = {
         "timestamp": timestamp,
         "price": price,
@@ -46,5 +88,4 @@ def record_decision(
         "action": action,
         "logged_at": time.time(),
     }
-    with LOG_PATH.open("a") as f:
-        f.write(json.dumps(entry) + "\n")
+    _get_logger().info(json.dumps(entry))
