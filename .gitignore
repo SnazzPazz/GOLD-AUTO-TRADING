@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 logs/*.log
 logs/*.log.*
+logs/*.out
 logs/*.jsonl
 logs/*.jsonl.*
 logs/*.csv
