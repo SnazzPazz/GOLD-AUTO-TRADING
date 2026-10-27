@@ -163,8 +163,14 @@ class OandaPracticeBroker(BrokerExecution):
             return None
         resp.raise_for_status()
         data = resp.json()["position"]
-        long_units = int(data["long"]["units"])
-        short_units = int(data["short"]["units"])
+        # float() then int(), not int() directly: OANDA returns units as a decimal
+        # string ("-40.0000", not "-40"), which int() can't parse at all (ValueError) --
+        # confirmed live against a real practice-account position opened this session,
+        # which crashed the whole demo loop on the very next poll cycle. Every prior
+        # test of this method used a hand-built fake response with plain integer
+        # strings, so this never got exercised against OANDA's real format before now.
+        long_units = int(float(data["long"]["units"]))
+        short_units = int(float(data["short"]["units"]))
         if long_units == 0 and short_units == 0:
             return None
         units = long_units if long_units != 0 else short_units

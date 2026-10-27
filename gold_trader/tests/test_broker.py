@@ -1,6 +1,9 @@
+from unittest.mock import MagicMock
+
 import pytest
 
-from gold_trader.execution.broker import SimulatedBroker
+from gold_trader.config import Settings
+from gold_trader.execution.broker import OandaPracticeBroker, SimulatedBroker
 from gold_trader.risk.risk_manager import TradePlan
 from gold_trader.strategy.signal_engine import Direction
 
@@ -65,3 +68,67 @@ def test_spread_cost_reduces_pnl():
     # 10 units * $0.30/unit round-trip cost = $3 taken off the same gross move.
     assert trade_with_cost.pnl == pytest.approx(97.0)
     assert broker_with_cost.balance == pytest.approx(10_097.0)
+
+
+def _make_oanda_broker() -> OandaPracticeBroker:
+    settings = Settings(oanda_api_key="fake-key", oanda_account_id="fake-account", oanda_environment="practice")
+    return OandaPracticeBroker(settings)
+
+
+def _fake_response(json_data: dict, status_code: int = 200) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = json_data
+    resp.raise_for_status.side_effect = Exception(f"HTTP {status_code}") if status_code >= 400 else None
+    return resp
+
+
+def test_get_open_position_parses_short_position_with_decimal_unit_string():
+    """Regression test for a real bug found live against a real OANDA practice
+    account this session: OANDA returns position units as a decimal string
+    ("-40.0000", not "-40"), which int() can't parse at all (ValueError) --
+    this crashed the entire demo loop on the very first poll cycle after a
+    real position was opened. No prior test exercised this method against
+    OANDA's actual response format."""
+    broker = _make_oanda_broker()
+    broker._session.get = MagicMock(return_value=_fake_response({
+        "position": {
+            "long": {"units": "0.0000", "averagePrice": "0.0"},
+            "short": {"units": "-40.0000", "averagePrice": "4011.21"},
+        }
+    }))
+    pos = broker.get_open_position()
+    assert pos is not None
+    assert pos.units == -40
+    assert pos.entry_price == pytest.approx(4011.21)
+
+
+def test_get_open_position_parses_long_position_with_decimal_unit_string():
+    broker = _make_oanda_broker()
+    broker._session.get = MagicMock(return_value=_fake_response({
+        "position": {
+            "long": {"units": "25.0000", "averagePrice": "4011.21"},
+            "short": {"units": "0.0000", "averagePrice": "0.0"},
+        }
+    }))
+    pos = broker.get_open_position()
+    assert pos is not None
+    assert pos.units == 25
+    assert pos.entry_price == pytest.approx(4011.21)
+
+
+def test_get_open_position_returns_none_when_flat():
+    broker = _make_oanda_broker()
+    broker._session.get = MagicMock(return_value=_fake_response({
+        "position": {
+            "long": {"units": "0.0000", "averagePrice": "0.0"},
+            "short": {"units": "0.0000", "averagePrice": "0.0"},
+        }
+    }))
+    assert broker.get_open_position() is None
+
+
+def test_get_open_position_returns_none_on_404():
+    broker = _make_oanda_broker()
+    broker._session.get = MagicMock(return_value=_fake_response({}, status_code=404))
+    assert broker.get_open_position() is None
