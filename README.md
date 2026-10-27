@@ -506,8 +506,10 @@ and — most importantly — whether any circuit breaker has halted trading
 and which one. Purely a local file read; no credentials needed.
 
 **Running it unattended** (restart on crash, don't restart-loop forever on
-a real bug): see `deploy/README.md` for a systemd unit and a portable
-bash restart-loop script, whichever fits your machine. Research runs
+a real bug): see `deploy/README.md` for a systemd unit (Linux), a portable
+bash restart-loop script (macOS/Linux), or Windows Task Scheduler + a
+Python port of the same restart logic -- whichever fits your machine.
+Research runs
 (`walk-forward`, `rolling-wf`, `stress-test`, and `backtest`) also accept
 `--cache-ttl-seconds` to cache the yfinance fetch to `data_cache/`, so
 repeated runs within that window use identical data instead of running

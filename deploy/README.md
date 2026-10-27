@@ -7,7 +7,7 @@ exact same risk/circuit-breaker behavior documented in the main README. All
 it adds is: restart it if it crashes, and don't let one bug restart-loop
 forever.
 
-Pick one of the two options below. Either way, check on it afterwards with
+Pick whichever option below matches your machine. Either way, check on it afterwards with
 `python main.py status` (see main README) -- that's the thing that doesn't
 need you to read raw logs to know whether it's still running and whether a
 circuit breaker has tripped.
@@ -69,6 +69,65 @@ long memory that punishes an unrelated crash months later.
 Stop it with Ctrl-C. It won't restart after that (that's the "exited cleanly"
 path, the same one a normal Ctrl-C to `main.py demo` itself takes).
 
+## Option C: Windows Task Scheduler
+
+systemd and the bash script don't apply on Windows. `run_demo_supervised.py`
+is the same restart/backoff/give-up logic ported to plain Python, and Task
+Scheduler is what triggers it automatically at log on.
+
+1. Set up a venv and install dependencies (PowerShell or cmd, from the repo
+   root):
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+2. Create `.env` from `.env.example` and fill in your OANDA credentials.
+3. Open **Task Scheduler** (search for it in the Start menu) and create the
+   task:
+   - **Action menu -> Create Task...** (not "Create Basic Task" -- the full
+     dialog has the "Start in" field below, which matters).
+   - **General** tab: name it `GoldTrader`. Leave "Run only when user is
+     logged on" checked (simplest -- avoids storing a password for running
+     unattended before login).
+   - **Triggers** tab: New -> "At log on" -> your user -> OK. This is what
+     makes it start automatically when you turn your computer on and log in.
+   - **Actions** tab: New -> "Start a program":
+     - Program/script: the full path to `.venv\Scripts\python.exe` inside
+       your checkout (e.g. `C:\Users\you\GOLD-AUTO-TRADING\.venv\Scripts\python.exe`).
+     - Add arguments: `deploy\run_demo_supervised.py oanda` (or `simulated`).
+     - **Start in**: the repo root (e.g. `C:\Users\you\GOLD-AUTO-TRADING`) --
+       don't skip this, or relative paths like `.env` won't resolve correctly.
+   - **Settings** tab: find "Stop the task if it runs longer than" and
+     **uncheck it**. It defaults to checked (often 3 days) on some Windows
+     versions, which would silently kill a run you wanted to leave going
+     for a week.
+   - Click OK.
+4. Log off and back on (or just run the task once manually from the Task
+   Scheduler Library to test it immediately) to confirm it starts.
+5. Check on it with `python main.py status` from a terminal, same as any
+   other platform.
+6. Stop it: either shut down/log off (Windows will end the process as part
+   of that -- see the note below), or select the task in the Task Scheduler
+   Library and click **End**.
+
+If you'd rather use the command line than the GUI, the equivalent is:
+```cmd
+schtasks /create /tn "GoldTrader" /tr "\"C:\Users\you\GOLD-AUTO-TRADING\.venv\Scripts\python.exe\" \"C:\Users\you\GOLD-AUTO-TRADING\deploy\run_demo_supervised.py\" oanda" /sc onlogon /f
+```
+(adjust the two paths to match your checkout; run from an elevated or
+regular Command Prompt, not PowerShell, since the quoting above is cmd-style).
+
+**One honest caveat, not a bug:** unlike `systemctl stop` on Linux, Windows
+shutting down or logging off a background process generally doesn't give it
+a chance to run cleanup code -- there's no real equivalent of SIGTERM
+delivery on Windows for a console-less process, so you likely won't see the
+"stopped by user" log line on shutdown that you'd see from Ctrl-C. This
+doesn't affect safety: as covered below, OANDA holds any open position's
+stop-loss/take-profit server-side regardless of whether this process is
+running at all. It only means the shutdown looks abrupt in the logs rather
+than clean.
+
 ## What this does NOT do
 
 - **Does not clear a halted circuit breaker.** If `max_drawdown_pct` or
@@ -76,5 +135,5 @@ path, the same one a normal Ctrl-C to `main.py demo` itself takes).
   crashing) but stops opening new trades, by design -- restarting it doesn't
   bypass that review requirement, and nothing here tries to.
 - **Does not touch OANDA credentials, live trading, or anything requiring
-  you to be at the machine.** Both options run the exact same demo-only
+  you to be at the machine.** All three options run the exact same demo-only
   `main.py demo` command you'd otherwise type yourself.
