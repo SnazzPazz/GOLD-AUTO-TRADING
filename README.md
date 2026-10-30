@@ -116,6 +116,37 @@ not caution, but a tested finding. The code stays in the repo (disabled)
 rather than being deleted, so the test is repeatable and the finding
 stays honest rather than disappearing.
 
+**News/economic-event correlation was also tested, not assumed** —
+`gold_trader/research/news_correlation.py`, run via `python main.py
+news-correlation`. The question: does real news/event history actually
+correlate with gold's subsequent move, at all, rather than just sounding
+plausible? A genuine per-headline study needs free, reliably-dated news
+text going back years; two candidates were evaluated and ruled out: GDELT's
+DOC 2.0 API only indexes from 2017 onward and rate-limited even single
+well-spaced test requests to the point of being unusable for a systematic
+pull, and BLS's own CPI release-calendar page (the one place with *exact*
+historical release dates, as opposed to the reference-month dates FRED
+tags its series with) returns HTTP 403 to a plain fetch. What *is* free
+and exactly dated back to 1982: FRED's daily fed-funds-target-rate series
+— every single Fed rate change, no release-date guessing, no ambiguity.
+
+Run as a real event study (72 rate-change days inside gold's full
+~26-year price history, tested with a bootstrap significance check
+against the real baseline return distribution, not a normality
+assumption): **no significant directional edge** — same-day, next-day,
+and two-day returns around hikes and cuts all come back statistically
+indistinguishable from random days (p-values from 0.30 to 0.89). This
+null result is as legitimate and useful as COT's negative finding above
+— the honest answer here is "a Fed rate change doesn't predictably move
+gold up or down," not a verdict dressed up to look more interesting than
+it is. What *did* come back significant: **volatility**. Next-day
+absolute return averages 1.22% around a rate change versus a 0.80%
+baseline (bootstrap p=0.0002) — gold moves more, in either direction,
+the day after a Fed decision, it just doesn't move in a predictable
+direction. That's a risk-sizing fact, not a trading signal, and nothing
+here is wired into the live signal engine — it's a research report you
+can reproduce, same as the COT/timeframe findings above.
+
 **The default timeframe was also wrong, and that was a real bug, not a
 tuning choice.** Every validated parameter below was tested on H1 candles.
 `CANDLE_GRANULARITY` shipped as `M15` regardless — meaning the demo loop's

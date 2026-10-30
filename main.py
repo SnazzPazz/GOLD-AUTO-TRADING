@@ -8,6 +8,7 @@ Usage:
     python main.py stress-test      [--bars N] [--granularity H1] [--paths 100] [--block-size 120] [--cache-ttl-seconds N]
     python main.py demo             [--broker simulated|oanda]
     python main.py status
+    python main.py news-correlation [--cache-ttl-seconds N]
 
 All four research commands (backtest, walk-forward, rolling-wf, stress-test)
 cache their raw yfinance fetch to data_cache/ for --cache-ttl-seconds (default
@@ -66,6 +67,17 @@ equity, open-position state, and -- most importantly -- whether any
 circuit breaker has halted trading and which one. No credentials needed;
 this is purely local file state, meant for checking on the bot without
 reading raw logs.
+
+`news-correlation` asks a different question than any command above:
+does real news/economic-event history actually correlate with gold's
+price, at all? It runs a real event study (every Fed rate-change day
+since 1982, tested against gold's full price history) rather than
+assuming a news/sentiment filter helps just because it sounds plausible.
+Purely a research report -- it never touches the signal engine or any
+live-trading config. See gold_trader/research/news_correlation.py for
+why Fed rate decisions specifically (the short version: it's the one
+free source with exact historical dates and zero release-date guessing;
+GDELT and BLS's own calendar were evaluated and ruled out).
 """
 from __future__ import annotations
 
@@ -80,6 +92,7 @@ from gold_trader.config import settings
 from gold_trader.data.providers import OandaDataProvider, YFinanceDataProvider
 from gold_trader.execution.broker import OandaPracticeBroker, SimulatedBroker
 from gold_trader.logging_config import setup_logging
+from gold_trader.research.news_correlation import run_news_correlation_study
 from gold_trader.research.stress_test import run_stress_test
 from gold_trader.research.walk_forward import run_rolling_walk_forward, run_walk_forward_study
 from gold_trader.risk.approval_gate import PortfolioApprovalGate
@@ -263,6 +276,31 @@ def cmd_stress_test(args: argparse.Namespace) -> None:
         "recover from everything in it. Looser settings will almost always\n"
         "show a better *average* here too; that is not a reason to loosen\n"
         "them -- check whether the worst case got meaningfully worse."
+    )
+
+
+def cmd_news_correlation(args: argparse.Namespace) -> None:
+    logger.info("Fetching full daily gold price history (source: yfinance GC=F, period=max)...")
+    provider = _research_provider(args)
+    candles = provider.get_historical_candles("D", 100_000)  # large count -> effectively "all available"
+    logger.info("Loaded %d daily bars (%s -> %s)", len(candles), candles.index[0], candles.index[-1])
+
+    ttl = args.cache_ttl_seconds if args.cache_ttl_seconds > 0 else None
+    result = run_news_correlation_study(candles["close"], cache_ttl_seconds=ttl)
+
+    print("\n" + "=" * 70)
+    print(" NEWS/EVENT CORRELATION STUDY (research only -- does not affect live trading)")
+    print("=" * 70)
+    print(result.summary())
+    print(
+        "\nThis is one event category (Fed rate changes) tested against the\n"
+        "question 'does news/event history actually correlate with gold's\n"
+        "move,' not a general headline-by-headline study -- see the module\n"
+        "docstring for why free, reliably-dated historical headline data\n"
+        "going back years turned out not to be available for this. A real,\n"
+        "repeatable finding here would still need the same walk-forward\n"
+        "treatment as any other signal before being trusted live; this\n"
+        "command does not wire anything into the signal engine on its own."
     )
 
 
@@ -567,6 +605,13 @@ def main() -> None:
 
     stat = sub.add_parser("status", help="Show the demo loop's last-known status (reads logs/status.json).")
     stat.set_defaults(func=cmd_status)
+
+    nc = sub.add_parser(
+        "news-correlation",
+        help="Research only: does news/event history actually correlate with gold's price?",
+    )
+    _add_cache_arg(nc)
+    nc.set_defaults(func=cmd_news_correlation)
 
     args = parser.parse_args()
     args.func(args)
